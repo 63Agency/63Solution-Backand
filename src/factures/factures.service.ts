@@ -1,9 +1,11 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import type { AppUser } from '../auth/types/app-user';
 import { ClientsService } from '../clients/clients.service';
 import { SendDocumentEmailDto } from '../common/dto/send-document-email.dto';
@@ -11,6 +13,7 @@ import { MailerService } from '../common/mailer/mailer.service';
 import { isAdminRole } from '../common/utils/roles';
 import { SupabaseService } from '../supabase/supabase.service';
 import type { FromDevisTransferDto } from './dto/from-devis-transfer.dto';
+import type { FactureLineDto } from './dto/facture-line.dto';
 import { UpsertFactureDto } from './dto/upsert-facture.dto';
 import { renderFacturePdf } from './facture.pdf';
 import type { FactureLineComputed, FactureTotals } from './types/facture.types';
@@ -79,6 +82,20 @@ function round2(n: number): number {
   return Math.round((n + Number.EPSILON) * 100) / 100;
 }
 
+const TOTALS_EPS = 0.02;
+
+function totalsNear(
+  a: { totalHt: number; montantTva: number; totalTtc: number },
+  b: { totalHt: number; montantTva: number; totalTtc: number },
+  eps = TOTALS_EPS,
+): boolean {
+  return (
+    Math.abs(a.totalHt - b.totalHt) <= eps &&
+    Math.abs(a.montantTva - b.montantTva) <= eps &&
+    Math.abs(a.totalTtc - b.totalTtc) <= eps
+  );
+}
+
 function clean(value: string | undefined | null): string {
   return (value ?? '').trim();
 }
@@ -133,15 +150,15 @@ export class FacturesService {
     };
   }
 
-  private compute(dto: UpsertFactureDto): {
-    lignes: FactureLineComputed[];
-    totals: FactureTotals;
-  } {
-    const lignes = dto.lignes.map((l) => {
+  private buildLinesFromDtos(
+    lines: Array<Pick<FactureLineDto, 'id' | 'titre' | 'description' | 'quantite' | 'prixUnitaireHt'>>,
+  ): FactureLineComputed[] {
+    return lines.map((l) => {
       const q = Number(l.quantite);
       const p = Number(l.prixUnitaireHt);
+      const lineId = clean(l.id);
       return {
-        id: clean(l.id),
+        id: lineId || randomUUID(),
         titre: clean(l.titre),
         description: clean(l.description),
         quantite: round2(q),
@@ -149,10 +166,25 @@ export class FacturesService {
         totalLigneHt: round2(q * p),
       };
     });
+  }
+
+  private totalsFromLinesAndTaux(
+    lignes: FactureLineComputed[],
+    tvaTaux: number,
+  ): FactureTotals {
     const totalHt = round2(lignes.reduce((s, l) => s + l.totalLigneHt, 0));
-    const montantTva = round2(totalHt * (Number(dto.tvaTaux) / 100));
+    const montantTva = round2(totalHt * (tvaTaux / 100));
     const totalTtc = round2(totalHt + montantTva);
-    return { lignes, totals: { totalHt, montantTva, totalTtc } };
+    return { totalHt, montantTva, totalTtc };
+  }
+
+  private compute(dto: UpsertFactureDto): {
+    lignes: FactureLineComputed[];
+    totals: FactureTotals;
+  } {
+    const lignes = this.buildLinesFromDtos(dto.lignes);
+    const totals = this.totalsFromLinesAndTaux(lignes, round2(Number(dto.tvaTaux)));
+    return { lignes, totals };
   }
 
   private async nextNumero(year: number): Promise<string> {
@@ -309,10 +341,51 @@ export class FacturesService {
     const year = new Date(devis.date_emission || new Date().toISOString()).getUTCFullYear();
     let lastError: string | null = null;
 
+    const transferLines = transfer?.lignes;
+    const hasExplicitLines =
+      Array.isArray(transferLines) && transferLines.length > 0;
+    const hasEmptyExplicitLines = Array.isArray(transferLines) && transferLines.length === 0;
+
+    let payloadLignes: FactureLineComputed[] = devis.lignes;
+    let tvaTauxFacture = round2(Number(devis.tva_taux));
+
     let totalHt = round2(Number(devis.total_ht));
     let montantTva = round2(Number(devis.montant_tva));
     let totalTtc = round2(Number(devis.total_ttc));
-    if (transfer?.totals) {
+
+    if (hasExplicitLines) {
+      payloadLignes = this.buildLinesFromDtos(transferLines!);
+      tvaTauxFacture =
+        transfer!.tvaTaux !== undefined && transfer!.tvaTaux !== null
+          ? round2(Number(transfer!.tvaTaux))
+          : round2(Number(devis.tva_taux));
+      const computed = this.totalsFromLinesAndTaux(payloadLignes, tvaTauxFacture);
+      if (transfer?.totals) {
+        if (!totalsNear(computed, transfer.totals)) {
+          throw new BadRequestException({
+            message:
+              'Les totaux ne correspondent pas au recalcul à partir des lignes et du taux de TVA.',
+          });
+        }
+      }
+      totalHt = computed.totalHt;
+      montantTva = computed.montantTva;
+      totalTtc = computed.totalTtc;
+    } else if (hasEmptyExplicitLines) {
+      payloadLignes = [];
+      tvaTauxFacture =
+        transfer?.tvaTaux !== undefined && transfer?.tvaTaux !== null
+          ? round2(Number(transfer.tvaTaux))
+          : round2(Number(devis.tva_taux));
+      if (!transfer?.totals) {
+        throw new BadRequestException({
+          message: 'totals est requis lorsque lignes est un tableau vide.',
+        });
+      }
+      totalHt = round2(Number(transfer.totals.totalHt));
+      montantTva = round2(Number(transfer.totals.montantTva));
+      totalTtc = round2(Number(transfer.totals.totalTtc));
+    } else if (transfer?.totals) {
       totalHt = round2(Number(transfer.totals.totalHt));
       montantTva = round2(Number(transfer.totals.montantTva));
       totalTtc = round2(Number(transfer.totals.totalTtc));
@@ -336,8 +409,8 @@ export class FacturesService {
         client_email: clean(devis.client_email) || null,
         client_telephone: clean(devis.client_telephone) || null,
         date_emission: devis.date_emission,
-        lignes: devis.lignes,
-        tva_taux: round2(Number(devis.tva_taux)),
+        lignes: payloadLignes,
+        tva_taux: tvaTauxFacture,
         mention_tva: clean(devis.mention_tva),
         paiement_mode: clean(devis.paiement_mode),
         paiement_banque: clean(devis.paiement_banque),
@@ -374,6 +447,8 @@ export class FacturesService {
           clientEmail: data.client_email ?? '',
           clientTelephone: data.client_telephone ?? '',
           dateEmission: data.date_emission,
+          lignes: payloadLignes,
+          tvaTaux: tvaTauxFacture,
           totals: {
             totalHt: Number(data.total_ht),
             montantTva: Number(data.montant_tva),

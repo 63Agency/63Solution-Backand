@@ -1,4 +1,5 @@
 import {
+  ArrayMaxSize,
   ArrayMinSize,
   IsArray,
   IsDateString,
@@ -76,6 +77,7 @@ export class UpsertDevisDto {
 
   @IsArray({ message: 'lignes doit être un tableau' })
   @ArrayMinSize(1, { message: 'au moins 1 ligne est requise' })
+  @ArrayMaxSize(200, { message: 'lignes max 200 éléments' })
   @ValidateNested({ each: true })
   @Type(() => DevisLineDto)
   lignes: DevisLineDto[];

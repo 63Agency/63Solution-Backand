@@ -1,22 +1,27 @@
-import { IsNumber, IsString, MaxLength, Min } from 'class-validator';
+import { Type } from 'class-transformer';
+import { IsInt, IsNumber, IsOptional, IsString, MaxLength, Min } from 'class-validator';
 
 export class DevisLineDto {
-  @IsString({ message: 'id ligne requis' })
+  /** Optionnel pour les nouvelles lignes ; le serveur assigne un UUID si absent ou vide. */
+  @IsOptional()
+  @IsString({ message: 'id ligne invalide' })
   @MaxLength(100, { message: 'id ligne trop long' })
-  id: string;
+  id?: string;
 
   @IsString({ message: 'titre requis' })
-  @MaxLength(200, { message: 'titre trop long' })
+  @MaxLength(200, { message: 'titre max 200 caractères' })
   titre: string;
 
   @IsString({ message: 'description requise' })
-  @MaxLength(5000, { message: 'description trop longue' })
+  @MaxLength(2000, { message: 'description max 2000 caractères' })
   description: string;
 
-  @IsNumber({}, { message: 'quantite doit être un nombre' })
-  @Min(0.000001, { message: 'quantite doit être > 0' })
+  @Type(() => Number)
+  @IsInt({ message: 'quantite doit être un entier >= 1' })
+  @Min(1, { message: 'quantite doit être >= 1' })
   quantite: number;
 
+  @Type(() => Number)
   @IsNumber({}, { message: 'prixUnitaireHt doit être un nombre' })
   @Min(0, { message: 'prixUnitaireHt doit être >= 0' })
   prixUnitaireHt: number;

@@ -4,6 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import { SendDocumentEmailDto } from '../common/dto/send-document-email.dto';
 import { MailerService } from '../common/mailer/mailer.service';
 import { SupabaseService } from '../supabase/supabase.service';
@@ -109,8 +110,9 @@ export class DevisService {
     const lignes = dto.lignes.map((l) => {
       const q = Number(l.quantite);
       const p = Number(l.prixUnitaireHt);
+      const lineId = clean(l.id);
       return {
-        id: clean(l.id),
+        id: lineId || randomUUID(),
         titre: clean(l.titre),
         description: clean(l.description),
         quantite: round2(q),
