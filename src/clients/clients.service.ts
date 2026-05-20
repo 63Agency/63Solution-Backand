@@ -8,14 +8,8 @@ import {
 import type { AppUser } from '../auth/types/app-user';
 import { isAdminRole } from '../common/utils/roles';
 import { SupabaseService } from '../supabase/supabase.service';
+import type { CreateClientDto } from './dto/create-client.dto';
 import type { UpdateClientDto } from './dto/update-client.dto';
-
-export type ClientUpsertPayload = {
-  clientNom: string;
-  clientEmail?: string | null;
-  clientTelephone?: string | null;
-  clientIce?: string | null;
-};
 
 function clean(value: string | undefined | null): string {
   return (value ?? '').trim();
@@ -71,6 +65,75 @@ export class ClientsService {
     }));
 
     return { items };
+  }
+
+  async create(dto: CreateClientDto, user: AppUser) {
+    const nom = clean(dto.clientNom);
+    if (!nom) {
+      throw new ConflictException({ message: 'clientNom requis' });
+    }
+
+    const emailRaw = clean(dto.clientEmail);
+    const emailNorm = emailRaw ? emailRaw.toLowerCase() : null;
+    const ice = clean(dto.clientIce) || null;
+    const phone = clean(dto.clientTelephone) || null;
+    const sb = this.supabase.getClient();
+    const ownerId = user.id;
+
+    if (emailNorm) {
+      const { data: dup } = await sb
+        .from('clients')
+        .select('id')
+        .eq('created_by', ownerId)
+        .eq('client_email', emailNorm)
+        .maybeSingle();
+      if (dup?.id) {
+        throw new ConflictException({
+          message: 'Un client avec cet email existe déjà.',
+        });
+      }
+    }
+
+    if (ice) {
+      const { data: dupIce } = await sb
+        .from('clients')
+        .select('id')
+        .eq('created_by', ownerId)
+        .eq('client_ice', ice)
+        .maybeSingle();
+      if (dupIce?.id) {
+        throw new ConflictException({
+          message: 'Un client avec cet ICE existe déjà.',
+        });
+      }
+    }
+
+    const now = new Date().toISOString();
+    const { data, error } = await sb
+      .from('clients')
+      .insert({
+        client_nom: nom,
+        client_email: emailNorm,
+        client_telephone: phone,
+        client_ice: ice,
+        created_by: ownerId,
+        created_at: now,
+        updated_at: now,
+      })
+      .select('id, client_nom, client_email, client_telephone, client_ice, created_by')
+      .single();
+
+    if (error || !data) {
+      const msg = error?.message ?? 'Création impossible';
+      if (msg.toLowerCase().includes('duplicate') || msg.toLowerCase().includes('unique')) {
+        throw new ConflictException({
+          message: 'Conflit: email ou ICE déjà utilisé pour un autre client.',
+        });
+      }
+      throw new ConflictException({ message: msg });
+    }
+
+    return mapClientRow(data as ClientRow);
   }
 
   private async byIdOr404(id: string): Promise<ClientRow> {
@@ -170,101 +233,14 @@ export class ClientsService {
     const row = await this.byIdOr404(id);
     this.ensureClientAccess(row, user);
 
-    /**
-     * Les devis/factures ne portent pas de FK `client_id` : suppression autorisée.
-     * Les champs client sur les documents existants ne sont pas modifiés.
-     */
+    /** Indépendant de devis / factures / propositions : suppression du client seule. */
     const { error } = await this.supabase.getClient().from('clients').delete().eq('id', id);
     if (error) {
-      const msg = error.message ?? 'Suppression impossible';
-      if (
-        msg.toLowerCase().includes('foreign key') ||
-        msg.toLowerCase().includes('constraint')
-      ) {
-        throw new ConflictException({
-          message:
-            'Suppression impossible: ce client est encore référencé par une autre ressource.',
-        });
-      }
-      throw new ConflictException({ message: msg });
+      throw new ConflictException({
+        message: error.message ?? 'Suppression impossible',
+      });
     }
 
     return { message: 'Client supprimé.', id };
-  }
-
-  /**
-   * Met à jour ou crée un client pour le propriétaire du document (devis/facture).
-   * Ne propage pas d'erreur HTTP si la table est absente ou autre souci DB.
-   */
-  async upsertFromDocument(createdBy: string, p: ClientUpsertPayload): Promise<void> {
-    const nom = clean(p.clientNom);
-    if (!nom) return;
-
-    const emailRaw = clean(p.clientEmail);
-    const emailNorm = emailRaw ? emailRaw.toLowerCase() : '';
-    const ice = clean(p.clientIce) || null;
-    const phone = clean(p.clientTelephone) || null;
-
-    try {
-      const sb = this.supabase.getClient();
-      let existingId: string | null = null;
-
-      if (emailNorm) {
-        const { data } = await sb
-          .from('clients')
-          .select('id')
-          .eq('created_by', createdBy)
-          .eq('client_email', emailNorm)
-          .maybeSingle();
-        if (data?.id) existingId = String(data.id);
-      }
-
-      if (!existingId && ice) {
-        const { data } = await sb
-          .from('clients')
-          .select('id')
-          .eq('created_by', createdBy)
-          .eq('client_ice', ice)
-          .maybeSingle();
-        if (data?.id) existingId = String(data.id);
-      }
-
-      if (!existingId) {
-        const { data } = await sb
-          .from('clients')
-          .select('id')
-          .eq('created_by', createdBy)
-          .eq('client_nom', nom)
-          .is('client_email', null)
-          .is('client_ice', null)
-          .maybeSingle();
-        if (data?.id) existingId = String(data.id);
-      }
-
-      const now = new Date().toISOString();
-      const row = {
-        client_nom: nom,
-        client_email: emailNorm || null,
-        client_telephone: phone,
-        client_ice: ice,
-        updated_at: now,
-      };
-
-      if (existingId) {
-        const { error } = await sb.from('clients').update(row).eq('id', existingId);
-        if (error) this.logger.warn(`clients update: ${error.message}`);
-        return;
-      }
-
-      const { error } = await sb.from('clients').insert({
-        ...row,
-        created_by: createdBy,
-        created_at: now,
-      });
-      if (error) this.logger.warn(`clients insert: ${error.message}`);
-    } catch (e) {
-      const err = e as Error;
-      this.logger.warn(`clients upsert: ${err.message}`);
-    }
   }
 }

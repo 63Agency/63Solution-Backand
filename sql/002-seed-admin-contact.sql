@@ -4,7 +4,7 @@
 insert into public.users (email, password_hash, role)
 values (
   lower('Contact@63agency.ma'),
-  '$2b$10$D0EKPLlkq52zeg3tvBlzyua9BvklwehfsZZK0nHoCTfpq3uWs/MYi',
+  '$2b$10$bVz0IRISoJOrjvD9.GA/GuFUFZYoeoOIB57wPi4EXrCrqo1wkF/7S',
   'admin'
 )
 on conflict (email) do update set

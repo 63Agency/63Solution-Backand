@@ -9,7 +9,7 @@ async function bootstrap() {
     logger: ['error', 'warn', 'log', 'debug', 'verbose'],
   });
   app.enableCors({
-    origin: ['https://app.63agency.com', 'http://localhost:3001'],
+    origin: ['https://app.63agency.com', 'http://localhost:3001' , 'http://localhost:3000'],
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
     credentials: true,

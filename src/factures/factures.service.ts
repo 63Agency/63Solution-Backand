@@ -7,7 +7,6 @@ import {
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import type { AppUser } from '../auth/types/app-user';
-import { ClientsService } from '../clients/clients.service';
 import { SendDocumentEmailDto } from '../common/dto/send-document-email.dto';
 import { MailerService } from '../common/mailer/mailer.service';
 import { isAdminRole } from '../common/utils/roles';
@@ -110,7 +109,6 @@ export class FacturesService {
   constructor(
     private readonly supabase: SupabaseService,
     private readonly mailer: MailerService,
-    private readonly clientsService: ClientsService,
   ) {}
 
   private hasNumero(value: unknown): value is string {
@@ -302,12 +300,6 @@ export class FacturesService {
         )
         .single();
       if (!error && data) {
-        void this.clientsService.upsertFromDocument(user.id, {
-          clientNom: dto.clientNom,
-          clientEmail: dto.clientEmail,
-          clientTelephone: dto.clientTelephone,
-          clientIce: dto.clientIce,
-        });
         const row = await this.ensureNumero({
           ...(data as unknown as FactureRow),
           date_emission: data.date_emission as string,
@@ -432,12 +424,6 @@ export class FacturesService {
         .single();
 
       if (!error && data) {
-        void this.clientsService.upsertFromDocument(devis.created_by, {
-          clientNom: devis.client_nom,
-          clientEmail: devis.client_email,
-          clientTelephone: devis.client_telephone,
-          clientIce: devis.client_ice,
-        });
         return {
           id: data.id,
           numero: normalizeFactureNumero(String(data.numero)),
@@ -545,12 +531,6 @@ export class FacturesService {
     const row = await this.ensureNumero({
       ...(data as unknown as FactureRow),
       date_emission: data.date_emission as string,
-    });
-    void this.clientsService.upsertFromDocument(user.id, {
-      clientNom: dto.clientNom,
-      clientEmail: dto.clientEmail,
-      clientTelephone: dto.clientTelephone,
-      clientIce: dto.clientIce,
     });
     return {
       id: row.id,

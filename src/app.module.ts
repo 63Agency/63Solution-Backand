@@ -8,6 +8,7 @@ import { AuthModule } from './auth/auth.module';
 import { ClientsModule } from './clients/clients.module';
 import { DevisModule } from './devis/devis.module';
 import { FacturesModule } from './factures/factures.module';
+import { PropositionsModule } from './propositions/propositions.module';
 import { SupabaseModule } from './supabase/supabase.module';
 
 @Module({
@@ -22,6 +23,7 @@ import { SupabaseModule } from './supabase/supabase.module';
     ClientsModule,
     DevisModule,
     FacturesModule,
+    PropositionsModule,
   ],
   controllers: [AppController],
   providers: [

@@ -9,7 +9,6 @@ import { SendDocumentEmailDto } from '../common/dto/send-document-email.dto';
 import { MailerService } from '../common/mailer/mailer.service';
 import { SupabaseService } from '../supabase/supabase.service';
 import type { AppUser } from '../auth/types/app-user';
-import { ClientsService } from '../clients/clients.service';
 import { isAdminRole } from '../common/utils/roles';
 import { UpsertDevisDto } from './dto/upsert-devis.dto';
 import type { DevisLineComputed, DevisTotals } from './types/devis.types';
@@ -65,7 +64,6 @@ export class DevisService {
   constructor(
     private readonly supabase: SupabaseService,
     private readonly mailer: MailerService,
-    private readonly clientsService: ClientsService,
   ) {}
 
   async list(user: AppUser) {
@@ -210,12 +208,6 @@ export class DevisService {
         )
         .single();
       if (!error && data) {
-        void this.clientsService.upsertFromDocument(user.id, {
-          clientNom: dto.clientNom,
-          clientEmail: dto.clientEmail,
-          clientTelephone: dto.clientTelephone,
-          clientIce: dto.clientIce,
-        });
         return {
           id: data.id,
           numero: normalizeDevisNumero(String(data.numero)),
@@ -315,12 +307,6 @@ export class DevisService {
     if (error || !data) {
       throw new ConflictException({ message: error?.message ?? 'update refusé' });
     }
-    void this.clientsService.upsertFromDocument(user.id, {
-      clientNom: dto.clientNom,
-      clientEmail: dto.clientEmail,
-      clientTelephone: dto.clientTelephone,
-      clientIce: dto.clientIce,
-    });
     return {
       id: data.id,
       numero: normalizeDevisNumero(String(data.numero)),

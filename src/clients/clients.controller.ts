@@ -3,14 +3,18 @@ import {
   Controller,
   Delete,
   Get,
+  HttpCode,
+  HttpStatus,
   Param,
   Patch,
+  Post,
   Put,
   Req,
   UseGuards,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import type { AppUser } from '../auth/types/app-user';
+import { CreateClientDto } from './dto/create-client.dto';
 import { UpdateClientDto } from './dto/update-client.dto';
 import { ClientsService } from './clients.service';
 
@@ -32,6 +36,12 @@ export class ClientsController {
   @Get('mine')
   mine(@Req() req: { user: AppUser }) {
     return this.clients.list(req.user);
+  }
+
+  @Post()
+  @HttpCode(HttpStatus.CREATED)
+  create(@Body() dto: CreateClientDto, @Req() req: { user: AppUser }) {
+    return this.clients.create(dto, req.user);
   }
 
   @Patch(':id')
