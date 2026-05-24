@@ -13,6 +13,10 @@ import type {
 } from './types/whatsapp.types';
 import { mapMetaStatus, MetaService } from './meta.service';
 import { normalizePhoneNumber } from './utils/phone';
+import {
+  formatSupabaseError,
+  stringifyForLog,
+} from './utils/whatsapp-debug-log';
 
 type ConversationRow = {
   id: string;
@@ -277,45 +281,117 @@ export class WhatsappService {
 
   /** Traitement webhook Meta Cloud API (async, erreurs loguées). */
   async handleMetaWebhook(payload: Record<string, unknown>): Promise<void> {
-    if (payload.object !== 'whatsapp_business_account') {
-      this.logger.debug(
-        `Webhook Meta ignoré (object=${String(payload.object ?? '')})`,
-      );
-      return;
-    }
+    this.logger.log(
+      `[Meta handler] start object=${String(payload.object ?? '')}`,
+    );
 
-    const entries = Array.isArray(payload.entry) ? payload.entry : [];
-    for (const entry of entries) {
-      if (!entry || typeof entry !== 'object') continue;
-      const changes = Array.isArray((entry as Record<string, unknown>).changes)
-        ? ((entry as Record<string, unknown>).changes as unknown[])
-        : [];
-      for (const change of changes) {
-        if (!change || typeof change !== 'object') continue;
-        const value = (change as Record<string, unknown>).value;
-        if (value && typeof value === 'object') {
-          await this.processMetaWebhookValue(value as Record<string, unknown>);
+    try {
+      if (payload.object !== 'whatsapp_business_account') {
+        this.logger.warn(
+          `[Meta handler] ignored — unexpected object="${String(payload.object ?? '')}" (expected whatsapp_business_account)`,
+        );
+        return;
+      }
+
+      const entries = Array.isArray(payload.entry) ? payload.entry : [];
+      this.logger.log(`[Meta handler] entries count=${entries.length}`);
+
+      if (entries.length === 0) {
+        this.logger.warn('[Meta handler] no entries in payload');
+      }
+
+      for (let ei = 0; ei < entries.length; ei++) {
+        const entry = entries[ei];
+        if (!entry || typeof entry !== 'object') {
+          this.logger.warn(`[Meta handler] entry[${ei}] skipped (invalid)`);
+          continue;
+        }
+        const entryObj = entry as Record<string, unknown>;
+        const changes = Array.isArray(entryObj.changes)
+          ? (entryObj.changes as unknown[])
+          : [];
+        this.logger.log(
+          `[Meta handler] entry[${ei}] id=${String(entryObj.id ?? '')} changes=${changes.length}`,
+        );
+
+        for (let ci = 0; ci < changes.length; ci++) {
+          const change = changes[ci];
+          if (!change || typeof change !== 'object') {
+            this.logger.warn(
+              `[Meta handler] entry[${ei}] change[${ci}] skipped (invalid)`,
+            );
+            continue;
+          }
+          const changeObj = change as Record<string, unknown>;
+          const field = String(changeObj.field ?? '');
+          const value = changeObj.value;
+          this.logger.log(
+            `[Meta handler] entry[${ei}] change[${ci}] field=${field} value=${value && typeof value === 'object' ? 'object' : 'missing'}`,
+          );
+          if (value && typeof value === 'object') {
+            await this.processMetaWebhookValue(
+              value as Record<string, unknown>,
+              ei,
+              ci,
+            );
+          }
         }
       }
+
+      this.logger.log('[Meta handler] completed OK');
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      const stack = err instanceof Error ? err.stack : undefined;
+      this.logger.error(`[Meta handler] fatal error: ${message}`, stack);
+      if (err && typeof err === 'object') {
+        this.logger.error(
+          `[Meta handler] error payload:\n${stringifyForLog(err)}`,
+        );
+      }
+      throw err;
     }
   }
 
   private async processMetaWebhookValue(
     value: Record<string, unknown>,
+    entryIndex: number,
+    changeIndex: number,
   ): Promise<void> {
+    const prefix = `[Meta value e${entryIndex}c${changeIndex}]`;
+    const metadata =
+      value.metadata && typeof value.metadata === 'object'
+        ? (value.metadata as Record<string, unknown>)
+        : null;
+    if (metadata) {
+      this.logger.log(
+        `${prefix} metadata phone_number_id=${String(metadata.phone_number_id ?? '')} display=${String(metadata.display_phone_number ?? '')}`,
+      );
+    }
+
     const statuses = Array.isArray(value.statuses) ? value.statuses : [];
+    this.logger.log(`${prefix} statuses count=${statuses.length}`);
     for (const raw of statuses) {
       if (!raw || typeof raw !== 'object') continue;
       const st = raw as Record<string, unknown>;
       const messageId = pickStr(st, 'id');
       const status = pickStr(st, 'status');
+      this.logger.log(
+        `${prefix} status update messageId=${messageId} status=${status}`,
+      );
       if (messageId) {
         await this.updateMessageStatus(messageId, status);
       }
     }
 
     const messages = Array.isArray(value.messages) ? value.messages : [];
-    if (messages.length === 0) return;
+    this.logger.log(`${prefix} messages count=${messages.length}`);
+
+    if (messages.length === 0) {
+      this.logger.log(
+        `${prefix} no messages in this change (status-only or empty)`,
+      );
+      return;
+    }
 
     const contactNameByWaId = new Map<string, string>();
     const contacts = Array.isArray(value.contacts) ? value.contacts : [];
@@ -330,20 +406,34 @@ export class WhatsappService {
       const name = profile ? pickStr(profile, 'name') : '';
       if (waId && name) contactNameByWaId.set(waId, name);
     }
+    this.logger.log(`${prefix} contacts mapped=${contactNameByWaId.size}`);
 
-    for (const raw of messages) {
-      if (!raw || typeof raw !== 'object') continue;
+    for (let mi = 0; mi < messages.length; mi++) {
+      const raw = messages[mi];
+      if (!raw || typeof raw !== 'object') {
+        this.logger.warn(`${prefix} message[${mi}] skipped (invalid)`);
+        continue;
+      }
       const msg = raw as Record<string, unknown>;
       const from = pickStr(msg, 'from');
       const phone = normalizePhoneNumber(from);
-      if (!phone) continue;
-
       const type = pickStr(msg, 'type') || 'text';
       const text = extractMetaMessageBody(msg);
       const metaMessageId = pickStr(msg, 'id');
       const sentAt =
         parseWebhookTimestamp(pickStr(msg, 'timestamp')) ??
         new Date().toISOString();
+
+      this.logger.log(
+        `${prefix} parse message[${mi}] from=${from} phone=${phone} type=${type} metaId=${metaMessageId} text="${text.slice(0, 200)}${text.length > 200 ? '…' : ''}"`,
+      );
+
+      if (!phone) {
+        this.logger.warn(
+          `${prefix} message[${mi}] skipped — no phone (from="${from}")`,
+        );
+        continue;
+      }
 
       const conv = await this.findOrCreateConversation({
         phone,
@@ -356,19 +446,24 @@ export class WhatsappService {
         incrementUnread: true,
       });
 
-      if (metaMessageId || text) {
-        await this.persistMessage({
-          conversationId: conv.id,
-          direction: 'inbound',
-          body: text,
-          type,
-          status: 'delivered',
-          watiMessageId: metaMessageId || null,
-          watiLocalId: null,
-          sentAt,
-          incrementUnread: false,
-        });
+      if (!metaMessageId && !text) {
+        this.logger.warn(
+          `${prefix} message[${mi}] skipped persist — no metaMessageId and empty body`,
+        );
+        continue;
       }
+
+      await this.persistMessage({
+        conversationId: conv.id,
+        direction: 'inbound',
+        body: text,
+        type,
+        status: 'delivered',
+        watiMessageId: metaMessageId || null,
+        watiLocalId: null,
+        sentAt,
+        incrementUnread: false,
+      });
     }
   }
 
@@ -377,14 +472,23 @@ export class WhatsappService {
     statusRaw: string,
   ): Promise<void> {
     const status = mapMetaStatus(statusRaw);
-    const { error } = await this.supabase
+    const { data, error } = await this.supabase
       .getClient()
       .from('whatsapp_messages')
       .update({ status })
-      .eq('wati_message_id', watiMessageId);
+      .eq('wati_message_id', watiMessageId)
+      .select('id');
+
     if (error) {
-      this.logger.warn(`Maj statut message Meta: ${error.message}`);
+      this.logger.error(
+        `[Meta status] update failed metaId=${watiMessageId} status=${status} error=${formatSupabaseError(error)}`,
+      );
+      return;
     }
+    const count = Array.isArray(data) ? data.length : 0;
+    this.logger.log(
+      `[Meta status] updated metaId=${watiMessageId} status=${status} rows=${count}`,
+    );
   }
 
   private async conversationByIdOr404(id: string): Promise<ConversationRow> {
@@ -410,16 +514,30 @@ export class WhatsappService {
     lastMessageAt: string;
     incrementUnread: boolean;
   }): Promise<ConversationRow> {
+    this.logger.log(
+      `[Supabase conversation] find phone=${input.phone} contactName=${input.contactName ?? ''} incrementUnread=${input.incrementUnread}`,
+    );
+
     const sb = this.supabase.getClient();
-    const { data: existing } = await sb
+    const { data: existing, error: findError } = await sb
       .from('whatsapp_conversations')
       .select('*')
       .eq('phone_number', input.phone)
       .maybeSingle();
 
+    if (findError) {
+      this.logger.error(
+        `[Supabase conversation] find error phone=${input.phone} ${formatSupabaseError(findError)}`,
+      );
+      throw new ConflictException({ message: findError.message });
+    }
+
     const now = new Date().toISOString();
 
     if (existing) {
+      this.logger.log(
+        `[Supabase conversation] found existing id=${existing.id} unread=${existing.unread_count}`,
+      );
       const unread = Number(existing.unread_count ?? 0);
       const patch = {
         contact_name: input.contactName || existing.contact_name,
@@ -438,11 +556,18 @@ export class WhatsappService {
         .select('*')
         .single();
       if (error || !data) {
+        this.logger.error(
+          `[Supabase conversation] update failed id=${existing.id} ${formatSupabaseError(error)}`,
+        );
         throw new ConflictException({ message: error?.message ?? 'update conv' });
       }
+      this.logger.log(
+        `[Supabase conversation] updated id=${data.id} unread=${data.unread_count} last="${String(data.last_message_text ?? '').slice(0, 80)}"`,
+      );
       return data as ConversationRow;
     }
 
+    this.logger.log(`[Supabase conversation] creating new phone=${input.phone}`);
     const { data, error } = await sb
       .from('whatsapp_conversations')
       .insert({
@@ -462,10 +587,16 @@ export class WhatsappService {
       .single();
 
     if (error || !data) {
+      this.logger.error(
+        `[Supabase conversation] insert failed phone=${input.phone} ${formatSupabaseError(error)}`,
+      );
       throw new ConflictException({
         message: error?.message ?? 'création conversation impossible',
       });
     }
+    this.logger.log(
+      `[Supabase conversation] created id=${data.id} phone=${data.phone_number}`,
+    );
     return data as ConversationRow;
   }
 
@@ -504,6 +635,10 @@ export class WhatsappService {
     sentAt: string;
     incrementUnread: boolean;
   }): Promise<WhatsappMessage> {
+    this.logger.log(
+      `[Supabase message] save conversationId=${input.conversationId} direction=${input.direction} metaId=${input.watiMessageId ?? ''} body="${input.body.slice(0, 120)}${input.body.length > 120 ? '…' : ''}"`,
+    );
+
     const sb = this.supabase.getClient();
     const row = {
       conversation_id: input.conversationId,
@@ -525,9 +660,20 @@ export class WhatsappService {
           'id, conversation_id, direction, body, type, status, wati_message_id, sent_at, created_at',
         )
         .single();
-      if (!error && data) return mapMessage(data as MessageRow);
+      if (!error && data) {
+        this.logger.log(
+          `[Supabase message] upsert OK id=${data.id} conversationId=${data.conversation_id}`,
+        );
+        return mapMessage(data as MessageRow);
+      }
       if (error && !error.message.toLowerCase().includes('duplicate')) {
-        this.logger.warn(`upsert message: ${error.message}`);
+        this.logger.warn(
+          `[Supabase message] upsert failed metaId=${input.watiMessageId} ${formatSupabaseError(error)} — fallback insert`,
+        );
+      } else if (error) {
+        this.logger.log(
+          `[Supabase message] upsert duplicate metaId=${input.watiMessageId} — fallback insert`,
+        );
       }
     }
 
@@ -540,10 +686,16 @@ export class WhatsappService {
       .single();
 
     if (error || !data) {
+      this.logger.error(
+        `[Supabase message] insert failed conversationId=${input.conversationId} ${formatSupabaseError(error)}`,
+      );
       throw new ConflictException({
         message: error?.message ?? 'insert message impossible',
       });
     }
+    this.logger.log(
+      `[Supabase message] insert OK id=${data.id} conversationId=${data.conversation_id}`,
+    );
     return mapMessage(data as MessageRow);
   }
 }
