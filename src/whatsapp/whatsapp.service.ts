@@ -11,7 +11,7 @@ import type {
   WhatsappConversation,
   WhatsappMessage,
 } from './types/whatsapp.types';
-import { mapWatiStatus, WatiService } from './wati.service';
+import { mapMetaStatus, MetaService } from './meta.service';
 import { normalizePhoneNumber } from './utils/phone';
 
 type ConversationRow = {
@@ -47,10 +47,38 @@ function pickStr(obj: Record<string, unknown>, ...keys: string[]): string {
   return '';
 }
 
-function pickBool(obj: Record<string, unknown>, key: string): boolean | null {
-  const v = obj[key];
-  if (typeof v === 'boolean') return v;
-  return null;
+function extractMetaMessageBody(msg: Record<string, unknown>): string {
+  const type = pickStr(msg, 'type');
+  if (type === 'text') {
+    const text = msg.text;
+    if (text && typeof text === 'object') {
+      return pickStr(text as Record<string, unknown>, 'body');
+    }
+    return '';
+  }
+  if (type === 'button') {
+    const button = msg.button;
+    if (button && typeof button === 'object') {
+      return pickStr(button as Record<string, unknown>, 'text');
+    }
+  }
+  if (type === 'interactive') {
+    const interactive = msg.interactive;
+    if (interactive && typeof interactive === 'object') {
+      const ir = interactive as Record<string, unknown>;
+      const buttonReply = ir.button_reply;
+      if (buttonReply && typeof buttonReply === 'object') {
+        return pickStr(
+          buttonReply as Record<string, unknown>,
+          'title',
+          'id',
+        );
+      }
+    }
+  }
+  const caption = pickStr(msg, 'caption');
+  if (caption) return caption;
+  return type ? `[${type}]` : '';
 }
 
 function mapConversation(row: ConversationRow): WhatsappConversation {
@@ -62,7 +90,7 @@ function mapConversation(row: ConversationRow): WhatsappConversation {
     lastMessageAt: row.last_message_at ? String(row.last_message_at) : null,
     unreadCount: Number(row.unread_count ?? 0),
     status: String(row.status ?? 'open'),
-    source: String(row.source ?? 'wati'),
+    source: String(row.source ?? 'meta'),
   };
 }
 
@@ -119,8 +147,16 @@ export class WhatsappService {
 
   constructor(
     private readonly supabase: SupabaseService,
-    private readonly wati: WatiService,
+    private readonly meta: MetaService,
   ) {}
+
+  verifyMetaWebhook(
+    mode: string | undefined,
+    token: string | undefined,
+    challenge: string | undefined,
+  ): string | null {
+    return this.meta.verifyWebhook(mode, token, challenge);
+  }
 
   async listConversations(): Promise<WhatsappConversation[]> {
     const { data, error } = await this.supabase
@@ -189,7 +225,7 @@ export class WhatsappService {
     dto: SendWhatsappMessageDto,
   ): Promise<WhatsappMessage> {
     const conv = await this.conversationByIdOr404(conversationId);
-    const sent = await this.wati.sendSessionMessage(
+    const sent = await this.meta.sendTextMessage(
       conv.phone_number,
       dto.text.trim(),
     );
@@ -202,7 +238,7 @@ export class WhatsappService {
       type: 'text',
       status: sent.status,
       watiMessageId: sent.whatsappMessageId,
-      watiLocalId: sent.watiLocalId,
+      watiLocalId: null,
       sentAt: sent.sentAt ?? now,
       incrementUnread: false,
     });
@@ -212,8 +248,7 @@ export class WhatsappService {
       lastMessageAt: sent.sentAt ?? now,
       contactName: conv.contact_name,
       watiContactId: conv.wati_contact_id,
-      watiConversationId:
-        sent.watiConversationId ?? conv.wati_conversation_id,
+      watiConversationId: conv.wati_conversation_id,
     });
 
     return message;
@@ -240,76 +275,100 @@ export class WhatsappService {
     return mapConversation(data as ConversationRow);
   }
 
-  /** Traitement webhook Wati (async, erreurs loguées). */
-  async handleWatiWebhook(payload: Record<string, unknown>): Promise<void> {
-    const eventType = pickStr(payload, 'eventType', 'event').toLowerCase();
-    const statusString = pickStr(payload, 'statusString', 'status');
-    const whatsappMessageId = pickStr(
-      payload,
-      'whatsappMessageId',
-      'whatsapp_message_id',
-    );
-    const textPreview = pickStr(payload, 'text', 'messageText', 'body');
-
-    if (
-      whatsappMessageId &&
-      eventType.includes('status') &&
-      !textPreview
-    ) {
-      await this.updateMessageStatus(whatsappMessageId, statusString);
+  /** Traitement webhook Meta Cloud API (async, erreurs loguées). */
+  async handleMetaWebhook(payload: Record<string, unknown>): Promise<void> {
+    if (payload.object !== 'whatsapp_business_account') {
+      this.logger.debug(
+        `Webhook Meta ignoré (object=${String(payload.object ?? '')})`,
+      );
       return;
     }
 
-    const waId = pickStr(payload, 'waId', 'whatsappNumber', 'from');
-    const phone = normalizePhoneNumber(waId);
-    if (!phone) {
-      this.logger.debug(`Webhook Wati ignoré (pas de numéro): ${eventType}`);
-      return;
+    const entries = Array.isArray(payload.entry) ? payload.entry : [];
+    for (const entry of entries) {
+      if (!entry || typeof entry !== 'object') continue;
+      const changes = Array.isArray((entry as Record<string, unknown>).changes)
+        ? ((entry as Record<string, unknown>).changes as unknown[])
+        : [];
+      for (const change of changes) {
+        if (!change || typeof change !== 'object') continue;
+        const value = (change as Record<string, unknown>).value;
+        if (value && typeof value === 'object') {
+          await this.processMetaWebhookValue(value as Record<string, unknown>);
+        }
+      }
+    }
+  }
+
+  private async processMetaWebhookValue(
+    value: Record<string, unknown>,
+  ): Promise<void> {
+    const statuses = Array.isArray(value.statuses) ? value.statuses : [];
+    for (const raw of statuses) {
+      if (!raw || typeof raw !== 'object') continue;
+      const st = raw as Record<string, unknown>;
+      const messageId = pickStr(st, 'id');
+      const status = pickStr(st, 'status');
+      if (messageId) {
+        await this.updateMessageStatus(messageId, status);
+      }
     }
 
-    const owner = pickBool(payload, 'owner');
-    const isOutbound =
-      owner === true ||
-      eventType.includes('sent') ||
-      eventType.includes('sessionmessagesent');
+    const messages = Array.isArray(value.messages) ? value.messages : [];
+    if (messages.length === 0) return;
 
-    const text = pickStr(payload, 'text', 'messageText', 'body');
-    const type = pickStr(payload, 'type') || 'text';
-    const contactName = pickStr(payload, 'senderName', 'contactName', 'name');
-    const watiConversationId = pickStr(payload, 'conversationId');
-    const watiLocalId = pickStr(payload, 'id', 'localMessageId');
-    const ts = parseWebhookTimestamp(
-      pickStr(payload, 'timestamp', 'created', 'time'),
-    );
-    const sentAt = ts ?? new Date().toISOString();
-    const direction: MessageDirection = isOutbound ? 'outbound' : 'inbound';
-    const status = mapWatiStatus(statusString || (isOutbound ? 'sent' : 'delivered'));
+    const contactNameByWaId = new Map<string, string>();
+    const contacts = Array.isArray(value.contacts) ? value.contacts : [];
+    for (const raw of contacts) {
+      if (!raw || typeof raw !== 'object') continue;
+      const contact = raw as Record<string, unknown>;
+      const waId = pickStr(contact, 'wa_id');
+      const profile =
+        contact.profile && typeof contact.profile === 'object'
+          ? (contact.profile as Record<string, unknown>)
+          : null;
+      const name = profile ? pickStr(profile, 'name') : '';
+      if (waId && name) contactNameByWaId.set(waId, name);
+    }
 
-    const source = eventType.includes('n8n') ? 'n8n' : 'wati';
+    for (const raw of messages) {
+      if (!raw || typeof raw !== 'object') continue;
+      const msg = raw as Record<string, unknown>;
+      const from = pickStr(msg, 'from');
+      const phone = normalizePhoneNumber(from);
+      if (!phone) continue;
 
-    const conv = await this.findOrCreateConversation({
-      phone,
-      contactName: contactName || null,
-      watiContactId: waId || phone,
-      watiConversationId: watiConversationId || null,
-      source,
-      lastMessageText: text || null,
-      lastMessageAt: sentAt,
-      incrementUnread: direction === 'inbound',
-    });
+      const type = pickStr(msg, 'type') || 'text';
+      const text = extractMetaMessageBody(msg);
+      const metaMessageId = pickStr(msg, 'id');
+      const sentAt =
+        parseWebhookTimestamp(pickStr(msg, 'timestamp')) ??
+        new Date().toISOString();
 
-    if (whatsappMessageId || watiLocalId || text) {
-      await this.persistMessage({
-        conversationId: conv.id,
-        direction,
-        body: text,
-        type,
-        status,
-        watiMessageId: whatsappMessageId || null,
-        watiLocalId: watiLocalId || null,
-        sentAt,
-        incrementUnread: false,
+      const conv = await this.findOrCreateConversation({
+        phone,
+        contactName: contactNameByWaId.get(from) || null,
+        watiContactId: from || phone,
+        watiConversationId: null,
+        source: 'meta',
+        lastMessageText: text || null,
+        lastMessageAt: sentAt,
+        incrementUnread: true,
       });
+
+      if (metaMessageId || text) {
+        await this.persistMessage({
+          conversationId: conv.id,
+          direction: 'inbound',
+          body: text,
+          type,
+          status: 'delivered',
+          watiMessageId: metaMessageId || null,
+          watiLocalId: null,
+          sentAt,
+          incrementUnread: false,
+        });
+      }
     }
   }
 
@@ -317,14 +376,14 @@ export class WhatsappService {
     watiMessageId: string,
     statusRaw: string,
   ): Promise<void> {
-    const status = mapWatiStatus(statusRaw);
+    const status = mapMetaStatus(statusRaw);
     const { error } = await this.supabase
       .getClient()
       .from('whatsapp_messages')
       .update({ status })
       .eq('wati_message_id', watiMessageId);
     if (error) {
-      this.logger.warn(`Maj statut message Wati: ${error.message}`);
+      this.logger.warn(`Maj statut message Meta: ${error.message}`);
     }
   }
 

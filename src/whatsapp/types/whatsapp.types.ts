@@ -22,11 +22,8 @@ export type WhatsappMessage = {
   createdAt: string;
 };
 
-export type WatiSendSessionResult = {
-  ok: boolean;
+export type MetaSendMessageResult = {
   whatsappMessageId: string | null;
-  watiLocalId: string | null;
-  watiConversationId: string | null;
   text: string;
   status: string;
   sentAt: string | null;

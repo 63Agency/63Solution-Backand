@@ -1,92 +1,77 @@
-# API WhatsApp / Wati (backend Nest)
+# API WhatsApp / Meta Cloud (backend Nest)
 
 ## Architecture
 
 ```
-N8N (1er message) → Wati API
-Wati webhooks     → POST /whatsapp/webhooks/wati (public, 200 rapide)
-Nest              → Supabase (whatsapp_conversations, whatsapp_messages)
-Front (JWT)       → GET/POST /whatsapp/...
-Front envoi       → Nest → Wati sendSessionMessage (pas d’appel Wati depuis le navigateur)
+N8N → Meta Graph API (envoi direct)
+Meta webhooks → POST /whatsapp/webhooks/meta (public)
+Nest            → Supabase (whatsapp_conversations, whatsapp_messages)
+Front (JWT)     → GET/POST /whatsapp/...
+Front envoi     → Nest → Meta Graph API (pas d’appel Meta depuis le navigateur)
 ```
 
 ## Setup
 
 1. Exécuter `sql/014-whatsapp-tables.sql` dans Supabase.
 2. `.env` :
-   - `WATI_API_URL` — endpoint depuis **Wati → Settings → API Docs**
-   - `WATI_API_TOKEN` — token Bearer (secret)
-   - `WATI_CHANNEL_NUMBER` — optionnel
-3. Wati dashboard → Webhooks :
-   - URL : `https://<ton-api>/whatsapp/webhooks/wati`
-   - Events : messages received, sent, status updates
+   - `META_VERIFY_TOKEN` — chaîne aléatoire (même valeur dans Meta Developer → Webhook)
+   - `META_ACCESS_TOKEN` — token Graph API (celui utilisé dans N8N)
+   - `META_PHONE_NUMBER_ID` — ex. `115716589414850`
+   - `META_GRAPH_API_VERSION` — optionnel, défaut `v18.0`
+3. Meta for Developers → WhatsApp → Configuration → Webhook :
+   - URL callback : `https://<ton-api>/whatsapp/webhooks/meta`
+   - Verify token : valeur de `META_VERIFY_TOKEN`
+   - Champs : `messages` (et statuts si proposé)
 4. Redémarrer Nest.
 
-## Webhook (public)
+## Webhook Meta (public)
 
-`POST /whatsapp/webhooks/wati` — **sans JWT**, répond `{ "ok": true }` immédiatement.
+### Vérification (GET)
 
-Gère :
+`GET /whatsapp/webhooks/meta?hub.mode=subscribe&hub.verify_token=...&hub.challenge=...`
 
-- Message entrant (`owner: false` / `eventType: message`) → conversation + message `inbound`, `unread_count++`
-- Message envoyé N8N/Wati (`sessionMessageSent`, `owner: true`) → conversation si absente + message `outbound`
-- Statut (`eventType` contient `status`) → maj `whatsapp_messages.status` par `whatsappMessageId`
+- Compare `hub.verify_token` à `META_VERIFY_TOKEN`
+- Répond avec le `hub.challenge` en texte brut (200)
 
-## API front (JWT)
+### Messages (POST)
+
+`POST /whatsapp/webhooks/meta` — **sans JWT**, répond `{ "ok": true }` immédiatement.
+
+Traite le payload `whatsapp_business_account` :
+
+- **messages** → conversation + message `inbound`, `unread_count++`
+- **statuses** → maj `whatsapp_messages.status` via `wati_message_id` (id Meta `wamid...`)
+
+## API front (JWT) — inchangée
 
 | Méthode | Route | Description |
 |---------|--------|-------------|
-| GET | `/whatsapp/conversations` | Liste `last_message_at` DESC |
+| GET | `/whatsapp/conversations` | Liste |
 | GET | `/whatsapp/conversations/:id` | Détail |
-| GET | `/whatsapp/conversations/:id/messages?limit=200&cursor=` | Messages chronologiques |
-| POST | `/whatsapp/conversations/:id/messages` | Body `{ "text": "..." }` → Wati + save outbound |
+| GET | `/whatsapp/conversations/:id/messages` | Messages |
+| POST | `/whatsapp/conversations/:id/messages` | `{ "text": "..." }` → Meta + save outbound |
 | PATCH | `/whatsapp/conversations/:id/read` | `unread_count = 0` |
 
-### Exemple conversation
+## Envoi Meta Graph API
 
-```json
+```http
+POST https://graph.facebook.com/v18.0/{META_PHONE_NUMBER_ID}/messages
+Authorization: Bearer {META_ACCESS_TOKEN}
+Content-Type: application/json
+
 {
-  "id": "uuid",
-  "phoneNumber": "212612345678",
-  "contactName": "Younes",
-  "lastMessageText": "Bonjour",
-  "lastMessageAt": "2026-05-18T10:00:00.000Z",
-  "unreadCount": 2,
-  "status": "open",
-  "source": "wati"
-}
-```
-
-### Exemple message
-
-```json
-{
-  "id": "uuid",
-  "conversationId": "uuid",
-  "direction": "inbound",
-  "body": "Bonjour",
+  "messaging_product": "whatsapp",
+  "recipient_type": "individual",
+  "to": "212612345678",
   "type": "text",
-  "status": "delivered",
-  "watiMessageId": "wamid...",
-  "createdAt": "2026-05-18T10:00:00.000Z"
+  "text": { "preview_url": false, "body": "Bonjour" }
 }
 ```
-
-Liste messages : `{ "items": [...], "nextCursor": null }`.
-
-## Envoi Wati
-
-`POST {WATI_API_URL}/api/v1/sendSessionMessage/{whatsappNumber}?messageText=...`  
-Header : `Authorization: Bearer {WATI_API_TOKEN}`
-
-## Polling front
-
-Polling ~3 s sur `GET /whatsapp/conversations` et messages. SSE/WebSocket possible plus tard.
 
 ## Fichiers
 
+- `src/whatsapp/meta.service.ts`
 - `src/whatsapp/whatsapp.service.ts`
-- `src/whatsapp/wati.service.ts`
 - `src/whatsapp/whatsapp.controller.ts`
 - `src/whatsapp/whatsapp-webhook.controller.ts`
 - `sql/014-whatsapp-tables.sql`
