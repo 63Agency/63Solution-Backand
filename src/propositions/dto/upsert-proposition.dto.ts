@@ -1,4 +1,5 @@
-import { Type } from 'class-transformer';
+import { plainToInstance, Transform, Type } from 'class-transformer';
+import { normalizeSection2Campagnes } from '../normalize-section2';
 import {
   ArrayMaxSize,
   ArrayMinSize,
@@ -84,10 +85,45 @@ export class PropositionSection1Dto {
   topics: string[];
 }
 
-export class PropositionSection2Dto {
+export class PropositionSection2BlocDto {
+  @IsString()
+  @MaxLength(500)
+  titre: string;
+
   @IsString()
   @MaxLength(5000)
-  texte: string;
+  intro: string;
+
+  @IsArray()
+  @ArrayMaxSize(30)
+  @IsString({ each: true })
+  points: string[];
+}
+
+export class PropositionSection2Dto {
+  /** Ancien front : `{ texte }` — normalisé par @Transform avant validation. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(50000)
+  texte?: string;
+
+  @IsString()
+  @MaxLength(5000)
+  intro: string;
+
+  @IsString()
+  @MaxLength(5000)
+  approcheIntro: string;
+
+  @IsArray()
+  @ArrayMaxSize(10)
+  @ValidateNested({ each: true })
+  @Type(() => PropositionSection2BlocDto)
+  blocs: PropositionSection2BlocDto[];
+
+  @IsString()
+  @MaxLength(5000)
+  conclusion: string;
 }
 
 export class PropositionSection3Dto {
@@ -121,6 +157,13 @@ export class PropositionStrategieDto {
   @Type(() => PropositionSection1Dto)
   section1CreationContenu: PropositionSection1Dto;
 
+  @Transform(({ value }) =>
+    plainToInstance(
+      PropositionSection2Dto,
+      normalizeSection2Campagnes(value),
+      { enableImplicitConversion: true },
+    ),
+  )
   @ValidateNested()
   @Type(() => PropositionSection2Dto)
   section2CampagnesPublicitaires: PropositionSection2Dto;
@@ -138,6 +181,11 @@ export class PropositionTarifLigneDto {
   @IsString({ message: 'service requis' })
   @MaxLength(500)
   service: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  detail?: string;
 
   @IsString()
   @MaxLength(200)

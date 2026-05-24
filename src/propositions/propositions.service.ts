@@ -3,6 +3,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import type { AppUser } from '../auth/types/app-user';
@@ -12,6 +13,7 @@ import { SendDocumentEmailDto } from '../common/dto/send-document-email.dto';
 import { MailerService } from '../common/mailer/mailer.service';
 import { UpsertPropositionDto } from './dto/upsert-proposition.dto';
 import { renderPropositionPdf } from './proposition.pdf';
+import { normalizeSection2Campagnes } from './normalize-section2';
 import type {
   PropositionContact,
   PropositionEmetteur,
@@ -55,8 +57,17 @@ function normalizeNumero(numero: string): string {
   return clean(numero);
 }
 
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function isUuid(value: string): boolean {
+  return UUID_RE.test(value.trim());
+}
+
 @Injectable()
 export class PropositionsService {
+  private readonly logger = new Logger(PropositionsService.name);
+
   constructor(
     private readonly supabase: SupabaseService,
     private readonly mailer: MailerService,
@@ -118,6 +129,44 @@ export class PropositionsService {
     return data as PropositionRow;
   }
 
+  /** Accepte un uuid ou un numéro officiel (ex. PROP-2026-011). */
+  private async resolveRefToId(ref: string, user: AppUser): Promise<string> {
+    const raw = clean(ref);
+    if (!raw) {
+      throw new BadRequestException({ message: 'id ou numero requis' });
+    }
+    if (isUuid(raw)) return raw;
+
+    const numero = normalizeNumero(raw);
+    let query = this.supabase
+      .getClient()
+      .from('propositions')
+      .select('id, created_by')
+      .eq('numero', numero);
+    if (!isAdminRole(user.role)) {
+      query = query.eq('created_by', user.id);
+    }
+    const { data, error } = await query.maybeSingle();
+    if (error) {
+      throw new ConflictException({ message: error.message });
+    }
+    if (!data?.id) {
+      throw new NotFoundException({
+        message: `proposition introuvable (${numero})`,
+      });
+    }
+    return String(data.id);
+  }
+
+  private normalizeStrategie(strategie: PropositionStrategie): PropositionStrategie {
+    return {
+      ...strategie,
+      section2CampagnesPublicitaires: normalizeSection2Campagnes(
+        strategie.section2CampagnesPublicitaires,
+      ),
+    };
+  }
+
   private rowToPayload(row: PropositionRow): PropositionPayload & {
     id: string;
     numero: string;
@@ -143,7 +192,7 @@ export class PropositionsService {
       clientTelephone: row.client_telephone ?? undefined,
       emetteur: row.emetteur,
       introduction: row.introduction,
-      strategie: row.strategie,
+      strategie: this.normalizeStrategie(row.strategie),
       tarifs: row.tarifs,
       pourquoiChoisir: row.pourquoi_choisir ?? [],
       prochainesEtapes: row.prochaines_etapes,
@@ -169,7 +218,7 @@ export class PropositionsService {
       client_telephone: clean(dto.clientTelephone) || null,
       emetteur: dto.emetteur,
       introduction: dto.introduction,
-      strategie: dto.strategie,
+      strategie: this.normalizeStrategie(dto.strategie as PropositionStrategie),
       tarifs: dto.tarifs,
       pourquoi_choisir: dto.pourquoiChoisir ?? [],
       prochaines_etapes: clean(dto.prochainesEtapes),
@@ -307,18 +356,86 @@ export class PropositionsService {
     return this.toSummary(data);
   }
 
-  async remove(id: string, user: AppUser) {
+  async remove(ref: string, user: AppUser) {
+    const raw = clean(ref);
+    this.logger.log(`remove proposition ref=${raw} user=${user.id}`);
+
+    let id: string;
+    try {
+      id = await this.resolveRefToId(ref, user);
+    } catch (e) {
+      if (e instanceof NotFoundException) {
+        this.logger.warn(
+          `remove ${raw}: introuvable en base (id localStorage obsolète ou déjà supprimée)`,
+        );
+        return {
+          message: 'Proposition introuvable (déjà supprimée ou jamais enregistrée).',
+          id: isUuid(raw) ? raw : '',
+          numero: isUuid(raw) ? '' : normalizeNumero(raw),
+        };
+      }
+      throw e;
+    }
+
     const row = await this.byIdOr404(id);
     this.ensureOwnership(row, user);
-    const { error } = await this.supabase
-      .getClient()
+
+    const sb = this.supabase.getClient();
+    const { data, error } = await sb
       .from('propositions')
       .delete()
-      .eq('id', id);
+      .eq('id', id)
+      .select('id, numero');
+
     if (error) {
-      throw new ConflictException({ message: error.message });
+      const msg = error.message ?? 'Suppression impossible';
+      this.logger.warn(`delete proposition ${id}: ${msg}`);
+      if (
+        msg.toLowerCase().includes('foreign key') ||
+        msg.toLowerCase().includes('constraint')
+      ) {
+        throw new ConflictException({
+          message:
+            'Suppression impossible: cette proposition est liée à une autre ressource.',
+        });
+      }
+      throw new ConflictException({ message: msg });
     }
-    return { message: 'Proposition supprimée.' };
+
+    const deleted = data?.[0];
+    if (!deleted?.id) {
+      this.logger.warn(
+        `delete proposition ${id}: 0 ligne supprimée (RLS ou clé Supabase ?)`,
+      );
+      throw new ConflictException({
+        message:
+          'Suppression impossible: aucune ligne supprimée en base. Exécutez sql/013-propositions-rls-service.sql et vérifiez SUPABASE_SERVICE_ROLE_KEY.',
+      });
+    }
+
+    const { data: stillThere } = await sb
+      .from('propositions')
+      .select('id')
+      .eq('id', id)
+      .maybeSingle();
+    if (stillThere?.id) {
+      this.logger.error(
+        `delete proposition ${id}: la ligne existe encore après DELETE`,
+      );
+      throw new ConflictException({
+        message:
+          'Suppression refusée par Supabase (RLS). Exécutez sql/013-propositions-rls-service.sql dans le SQL Editor.',
+      });
+    }
+
+    this.logger.log(
+      `proposition supprimée id=${deleted.id} numero=${deleted.numero}`,
+    );
+    return {
+      message: 'Proposition supprimée.',
+      id: String(deleted.id),
+      numero: String(deleted.numero ?? ''),
+    };
   }
 
   async buildPdf(id: string, user: AppUser): Promise<Buffer> {

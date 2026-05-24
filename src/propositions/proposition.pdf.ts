@@ -8,7 +8,14 @@ import {
   View,
   renderToBuffer,
 } from '@react-pdf/renderer';
-import type { PropositionPayload } from './types/proposition.types';
+import { normalizeSection2Campagnes } from './normalize-section2';
+import type {
+  PropositionPayload,
+  PropositionSection2Campagnes,
+} from './types/proposition.types';
+import { registerRobotoFonts } from './fonts/register-roboto';
+
+registerRobotoFonts();
 
 export type PropositionPdfInput = PropositionPayload & {
   numero: string;
@@ -46,7 +53,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 52,
     paddingBottom: 52,
     fontSize: 11.5,
-    fontFamily: 'Helvetica',
+    fontFamily: 'Roboto',
     color: '#1a1a1a',
     lineHeight: 1.45,
   },
@@ -112,7 +119,7 @@ const styles = StyleSheet.create({
     textAlign: 'left',
     fontSize: 11.5,
   },
-  boldInline: { fontFamily: 'Helvetica-Bold' },
+  boldInline: { fontFamily: 'Roboto', fontWeight: 'bold' },
   bulletList: {
     marginTop: 4,
     marginBottom: 6,
@@ -154,9 +161,11 @@ const styles = StyleSheet.create({
     borderRightWidth: 1,
     borderRightColor: '#bdbdbd',
   },
-  colService: { width: '40%' },
-  colPrix: { width: '30%' },
-  colPrixLast: { width: '30%', borderRightWidth: 0 },
+  colService: { width: '26%' },
+  colDetail: { width: '34%' },
+  colPrix: { width: '20%' },
+  colPrixLast: { width: '20%', borderRightWidth: 0 },
+  tdRich: { fontSize: 10.5, lineHeight: 1.35 },
   note: {
     marginTop: 10,
     marginBottom: 4,
@@ -164,9 +173,93 @@ const styles = StyleSheet.create({
     color: '#333',
     lineHeight: 1.45,
   },
+  page2: {
+    paddingTop: 44,
+    paddingBottom: 44,
+  },
+  page3: {
+    paddingTop: 40,
+    paddingBottom: 40,
+  },
+  page3Body: {
+    paddingBottom: 72,
+  },
+  dividerCompact: {
+    borderBottomWidth: 1,
+    borderBottomColor: '#c8c8c8',
+    marginVertical: 8,
+    width: '100%',
+  },
+  subHeadingCompact: {
+    fontSize: 12,
+    fontFamily: 'Helvetica-Bold',
+    marginBottom: 6,
+    marginTop: 0,
+    color: '#000',
+  },
+  sectionHeadingCompact: {
+    fontSize: 12.5,
+    fontFamily: 'Helvetica-Bold',
+    marginBottom: 6,
+    color: '#000',
+    textAlign: 'left',
+  },
+  paragraphPage2: {
+    marginBottom: 8,
+    lineHeight: 1.45,
+    textAlign: 'left',
+    fontSize: 11.5,
+  },
+  paragraphCompact: {
+    marginBottom: 6,
+    lineHeight: 1.42,
+    textAlign: 'left',
+    fontSize: 11.5,
+  },
+  tableWrapCompact: { marginTop: 6, marginBottom: 8 },
+  thCompact: {
+    paddingVertical: 6,
+    paddingHorizontal: 6,
+    fontFamily: 'Helvetica-Bold',
+    fontSize: 10,
+    borderRightWidth: 1,
+    borderRightColor: '#bdbdbd',
+  },
+  tdCompact: {
+    paddingVertical: 5,
+    paddingHorizontal: 6,
+    fontSize: 10,
+    borderRightWidth: 1,
+    borderRightColor: '#bdbdbd',
+  },
+  noteCompact: {
+    marginTop: 6,
+    marginBottom: 2,
+    fontSize: 9,
+    color: '#333',
+    lineHeight: 1.35,
+  },
+  bulletListCompact: {
+    marginTop: 2,
+    marginBottom: 4,
+    paddingLeft: 6,
+  },
+  bulletRowCompact: {
+    flexDirection: 'row',
+    marginBottom: 2,
+    paddingLeft: 10,
+  },
+  bulletTextCompact: { flex: 1, fontSize: 11, lineHeight: 1.4 },
   contactBlock: {
     marginTop: 28,
     paddingTop: 8,
+  },
+  contactBlockPage3: {
+    position: 'absolute',
+    bottom: 40,
+    left: 52,
+    right: 52,
+    paddingTop: 0,
   },
   contactName: {
     fontFamily: 'Helvetica-Bold',
@@ -220,16 +313,16 @@ function metaLine(label: string, value: string) {
   );
 }
 
-/** Paragraphe avec mots en gras (**, ou surlignage établissement / objectif). */
-function richParagraph(
+/** Texte avec **mot** → gras (+ surlignage établissement / objectif si fourni). */
+function richText(
   text: string,
   highlights: string[],
+  textStyle: typeof styles.paragraph | typeof styles.tdRich,
   key?: string,
 ): React.ReactElement {
-  const style = styles.paragraph;
   const cleaned = text ?? '';
   if (!cleaned) {
-    return React.createElement(Text, { key, style }, '');
+    return React.createElement(Text, { key, style: textStyle }, '');
   }
 
   const tokens: Array<{ bold: boolean; text: string }> = [];
@@ -277,7 +370,7 @@ function richParagraph(
 
   return React.createElement(
     Text,
-    { key, style },
+    { key, style: textStyle },
     flat.map((p, i) =>
       p.bold
         ? React.createElement(Text, { key: i, style: styles.boldInline }, p.text)
@@ -286,20 +379,62 @@ function richParagraph(
   );
 }
 
-function bulletItems(items: string[]) {
+function richParagraph(
+  text: string,
+  highlights: string[],
+  key?: string,
+  textStyle: typeof styles.paragraph = styles.paragraph,
+): React.ReactElement {
+  return richText(text, highlights, textStyle, key);
+}
+
+function tarifDetailCell(
+  detail: string | undefined,
+  tpl: (t: string) => string,
+  highlights: string[],
+  rowKey: string,
+  compact = false,
+): React.ReactElement {
+  const tdStyle = compact ? styles.tdCompact : styles.td;
+  const raw = (detail ?? '').trim();
+  if (!raw) {
+    return React.createElement(
+      Text,
+      { key: `${rowKey}-det`, style: [tdStyle, styles.colDetail] },
+      '—',
+    );
+  }
+  return React.createElement(
+    View,
+    { key: `${rowKey}-det`, style: [tdStyle, styles.colDetail] },
+    richText(tpl(raw), highlights, styles.tdRich, `${rowKey}-dtxt`),
+  );
+}
+
+function bulletItems(
+  items: string[],
+  listKey: string,
+  compact = false,
+) {
+  const rowStyle = compact ? styles.bulletRowCompact : styles.bulletRow;
+  const listStyle = compact ? styles.bulletListCompact : styles.bulletList;
   const rows = (items ?? [])
     .filter((t) => (t ?? '').trim().length > 0)
     .map((item, i) =>
       React.createElement(
         View,
-        { key: `b-${i}`, style: styles.bulletRow },
+        { key: `${listKey}-row-${i}`, style: rowStyle },
         React.createElement(Text, { style: styles.bulletDot }, '•'),
         React.createElement(Text, { style: styles.bulletText }, item),
       ),
     );
   if (rows.length === 0) return [];
   return [
-    React.createElement(View, { key: 'blist', style: styles.bulletList }, ...rows),
+    React.createElement(
+      View,
+      { key: listKey, style: listStyle },
+      ...rows,
+    ),
   ];
 }
 
@@ -321,9 +456,10 @@ function paragraphBlocks(
   tpl: (t: string) => string,
   highlights: string[],
   keyPrefix: string,
+  textStyle: typeof styles.paragraph = styles.paragraph,
 ): React.ReactElement[] {
   return splitParagraphs(text).map((p, i) =>
-    richParagraph(tpl(p), highlights, `${keyPrefix}-${i}`),
+    richParagraph(tpl(p), highlights, `${keyPrefix}-${i}`, textStyle),
   );
 }
 
@@ -346,6 +482,102 @@ function strategyH2() {
   );
 }
 
+function renderSection2Campagnes(
+  section: PropositionSection2Campagnes,
+  tpl: (t: string) => string,
+  highlights: string[],
+  compact = false,
+): React.ReactElement[] {
+  const paraStyle = compact ? styles.paragraphPage2 : styles.paragraph;
+  const out: React.ReactElement[] = [];
+  out.push(...paragraphBlocks(section.intro, tpl, highlights, 's2-intro', paraStyle));
+
+  const approche = (section.approcheIntro ?? '').trim();
+  if (approche) {
+    out.push(
+      richParagraph(tpl(approche), highlights, 's2-approche', paraStyle),
+    );
+  }
+
+  (section.blocs ?? []).forEach((bloc, bi) => {
+    const prefix = `s2-b${bi}`;
+    const titre = (bloc.titre ?? '').trim();
+    if (titre) {
+      out.push(
+        React.createElement(
+          Text,
+          { key: `${prefix}-titre`, style: paraStyle },
+          React.createElement(Text, { style: styles.boldInline }, tpl(titre)),
+        ),
+      );
+    }
+    out.push(
+      ...paragraphBlocks(
+        bloc.intro ?? '',
+        tpl,
+        highlights,
+        `${prefix}-intro`,
+        paraStyle,
+      ),
+    );
+    out.push(
+      ...bulletItems(
+        (bloc.points ?? []).map((p) => tpl(p)),
+        `${prefix}-pts`,
+        compact,
+      ),
+    );
+  });
+
+  out.push(
+    ...paragraphBlocks(
+      section.conclusion ?? '',
+      tpl,
+      highlights,
+      's2-concl',
+      paraStyle,
+    ),
+  );
+  return out;
+}
+
+function renderSection3(
+  section: PropositionPdfInput['strategie']['section3FunnelMarketing'],
+  tpl: (t: string) => string,
+  highlights: string[],
+  onPage2 = false,
+): React.ReactElement[] {
+  const headingStyle = onPage2 ? styles.subHeading : styles.subHeadingCompact;
+  const para = onPage2 ? styles.paragraphPage2 : styles.paragraphCompact;
+  return [
+    React.createElement(
+      Text,
+      { key: 's3-h', style: headingStyle },
+      '3. Funnel Marketing',
+    ),
+    ...paragraphBlocks(section.intro, tpl, highlights, 's3i', para),
+    ...bulletItems(section.criteres, 's3-crit', true),
+    ...paragraphBlocks(section.conclusion, tpl, highlights, 's3c', para),
+  ];
+}
+
+function renderSection4(
+  section: PropositionPdfInput['strategie']['section4Automatisation'],
+  tpl: (t: string) => string,
+  highlights: string[],
+): React.ReactElement[] {
+  const para = styles.paragraphCompact;
+  return [
+    React.createElement(
+      Text,
+      { key: 's4-h', style: styles.subHeadingCompact },
+      '4. Automatisation & Suivi',
+    ),
+    ...bulletItems(section.points ?? [], 's4-pts', true),
+    ...paragraphBlocks(section.objectif ?? '', tpl, highlights, 's4o', para),
+  ];
+}
+
 function renderSection1(
   section: PropositionPdfInput['strategie']['section1CreationContenu'],
   tpl: (t: string) => string,
@@ -362,7 +594,7 @@ function renderSection1(
       ? descBlocks
       : []),
     videosIntroLine(section.videosMin, section.videosMax),
-    ...bulletItems(section.topics ?? []),
+    ...bulletItems(section.topics ?? [], 's1-topics'),
   ];
 }
 
@@ -430,32 +662,20 @@ function page2(
   const s = input.strategie;
   return React.createElement(
     Page,
-    { size: 'A4', style: styles.page },
+    { size: 'A4', style: [styles.page, styles.page2] },
     React.createElement(
       Text,
       { style: styles.subHeading },
       '2. Campagnes Publicitaires – Facebook & Instagram',
     ),
-    ...paragraphBlocks(
-      s.section2CampagnesPublicitaires.texte,
+    ...renderSection2Campagnes(
+      s.section2CampagnesPublicitaires,
       tpl,
       highlights,
-      's2',
+      true,
     ),
-    divider('d3'),
-    React.createElement(Text, { style: styles.subHeading }, '3. Funnel Marketing'),
-    ...paragraphBlocks(s.section3FunnelMarketing.intro, tpl, highlights, 's3i'),
-    ...bulletItems(s.section3FunnelMarketing.criteres),
-    ...paragraphBlocks(
-      s.section3FunnelMarketing.conclusion,
-      tpl,
-      highlights,
-      's3c',
-    ),
-    divider('d4'),
-    React.createElement(Text, { style: styles.subHeading }, '4. Automatisation & Suivi'),
-    ...bulletItems(s.section4Automatisation.points),
-    ...paragraphBlocks(s.section4Automatisation.objectif, tpl, highlights, 's4o'),
+    divider('d2-3', styles.dividerCompact),
+    ...renderSection3(s.section3FunnelMarketing, tpl, highlights, true),
   );
 }
 
@@ -464,74 +684,108 @@ function page3(
   tpl: (t: string) => string,
   highlights: string[],
 ) {
+  const s = input.strategie;
+  const tagline =
+    (input.contact?.tagline ?? '').trim() ||
+    '63 AGENCY – Génération de Leads & Marketing Digital';
+
   return React.createElement(
     Page,
-    { size: 'A4', style: styles.page },
-    React.createElement(Text, { style: styles.sectionHeading }, 'Tarifs Proposés'),
+    { size: 'A4', style: [styles.page, styles.page3] },
     React.createElement(
       View,
-      { style: styles.tableWrap },
+      { style: styles.page3Body },
+      ...renderSection4(s.section4Automatisation, tpl, highlights),
+      divider('d5', styles.dividerCompact),
+      React.createElement(
+        Text,
+        { style: styles.sectionHeadingCompact },
+        'Tarifs Proposés',
+      ),
       React.createElement(
         View,
-        { style: styles.tableHeader },
-        React.createElement(
-          Text,
-          { style: [styles.th, styles.colService] },
-          'Service',
-        ),
-        React.createElement(
-          Text,
-          { style: [styles.th, styles.colPrix] },
-          'Prix Initial (MAD)',
-        ),
-        React.createElement(
-          Text,
-          { style: [styles.th, styles.colPrixLast] },
-          'Prix Offert (MAD)',
-        ),
-      ),
-      ...input.tarifs.lignes.map((l, i) =>
+        { style: styles.tableWrapCompact },
         React.createElement(
           View,
-          { key: `t-${i}`, style: styles.tableRow },
+          { style: styles.tableHeader },
           React.createElement(
             Text,
-            { style: [styles.td, styles.colService] },
-            l.service,
+            { style: [styles.thCompact, styles.colService] },
+            'Service',
           ),
           React.createElement(
             Text,
-            { style: [styles.td, styles.colPrix] },
-            l.prixInitial,
+            { style: [styles.thCompact, styles.colDetail] },
+            'Détail',
           ),
           React.createElement(
             Text,
-            { style: [styles.td, styles.colPrixLast] },
-            l.prixOffert,
+            { style: [styles.thCompact, styles.colPrix] },
+            'Prix Initial (MAD)',
+          ),
+          React.createElement(
+            Text,
+            { style: [styles.thCompact, styles.colPrixLast] },
+            'Prix Offert (MAD)',
+          ),
+        ),
+        ...(input.tarifs?.lignes ?? []).map((l, i) =>
+          React.createElement(
+            View,
+            { key: `t-${i}`, style: styles.tableRow },
+            React.createElement(
+              Text,
+              { style: [styles.tdCompact, styles.colService] },
+              l.service,
+            ),
+            tarifDetailCell(l.detail, tpl, highlights, `t-${i}`, true),
+            React.createElement(
+              Text,
+              { style: [styles.tdCompact, styles.colPrix] },
+              l.prixInitial,
+            ),
+            React.createElement(
+              Text,
+              { style: [styles.tdCompact, styles.colPrixLast] },
+              l.prixOffert,
+            ),
           ),
         ),
       ),
+      input.tarifs.noteMetaAds
+        ? React.createElement(
+            Text,
+            { style: styles.noteCompact },
+            input.tarifs.noteMetaAds,
+          )
+        : null,
+      divider('d6', styles.dividerCompact),
+      React.createElement(
+        Text,
+        { style: styles.sectionHeadingCompact },
+        'Pourquoi Choisir 63 AGENCY',
+      ),
+      ...bulletItems(input.pourquoiChoisir ?? [], 'why', true),
+      divider('d7', styles.dividerCompact),
+      React.createElement(
+        Text,
+        { style: styles.sectionHeadingCompact },
+        'Prochaines Étapes',
+      ),
+      richParagraph(
+        tpl(input.prochainesEtapes),
+        highlights,
+        'pe',
+        styles.paragraphCompact,
+      ),
     ),
-    input.tarifs.noteMetaAds
-      ? React.createElement(Text, { style: styles.note }, input.tarifs.noteMetaAds)
-      : null,
-    divider('d5'),
-    React.createElement(
-      Text,
-      { style: styles.sectionHeading },
-      'Pourquoi Choisir 63 AGENCY',
-    ),
-    ...bulletItems(input.pourquoiChoisir),
-    divider('d6'),
-    React.createElement(Text, { style: styles.sectionHeading }, 'Prochaines Étapes'),
-    richParagraph(tpl(input.prochainesEtapes), highlights, 'pe'),
     React.createElement(
       View,
-      { style: styles.contactBlock },
+      { style: styles.contactBlockPage3, wrap: false },
       React.createElement(Text, { style: styles.contactName }, input.contact.nom),
       contactLineWithIcon(ICON_PHONE, input.contact.telephone, 'ctel'),
       contactLineWithIcon(ICON_EMAIL, input.contact.email, 'cemail'),
-      React.createElement(Text, { style: styles.contactTagline }, input.contact.tagline),
+      React.createElement(Text, { style: styles.contactTagline }, tagline),
     ),
   );
 }
@@ -539,8 +793,58 @@ function page3(
 export async function renderPropositionPdf(
   input: PropositionPdfInput,
 ): Promise<Buffer> {
-  const etab = input.nomEtablissement;
-  const objectif = input.introduction.objectifProspects;
+  const etab = input.nomEtablissement ?? '';
+  const intro = input.introduction ?? {
+    paragraphe1: '',
+    paragraphe2: '',
+    objectifProspects: 0,
+  };
+  const objectif = Number(intro.objectifProspects) || 0;
+  const strategie = input.strategie ?? {
+    section1CreationContenu: {
+      description: '',
+      videosMin: 0,
+      videosMax: 0,
+      topics: [],
+    },
+    section2CampagnesPublicitaires: {
+      intro: '',
+      approcheIntro: '',
+      blocs: [],
+      conclusion: '',
+    },
+    section3FunnelMarketing: { intro: '', criteres: [], conclusion: '' },
+    section4Automatisation: { points: [], objectif: '' },
+  };
+  const tarifs = input.tarifs ?? { lignes: [], noteMetaAds: '' };
+  const contact = input.contact ?? {
+    nom: '',
+    telephone: '',
+    email: '',
+    tagline: '',
+  };
+  const strategieNormalized = {
+    ...strategie,
+    section2CampagnesPublicitaires: normalizeSection2Campagnes(
+      strategie.section2CampagnesPublicitaires,
+    ),
+  };
+
+  const safe: PropositionPdfInput = {
+    ...input,
+    nomEtablissement: etab,
+    introduction: intro,
+    strategie: strategieNormalized,
+    tarifs: {
+      ...tarifs,
+      lignes: Array.isArray(tarifs.lignes) ? tarifs.lignes : [],
+    },
+    pourquoiChoisir: Array.isArray(input.pourquoiChoisir)
+      ? input.pourquoiChoisir
+      : [],
+    contact,
+  };
+
   const tpl = (t: string) => resolveTemplate(t, etab, objectif);
   const highlights = [
     etab,
@@ -553,9 +857,9 @@ export async function renderPropositionPdf(
   const doc = React.createElement(
     Document,
     null,
-    page1(input, tpl, highlights),
-    page2(input, tpl, highlights),
-    page3(input, tpl, highlights),
+    page1(safe, tpl, highlights),
+    page2(safe, tpl, highlights),
+    page3(safe, tpl, highlights),
   );
 
   return renderToBuffer(doc);

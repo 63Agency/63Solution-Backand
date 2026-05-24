@@ -5,6 +5,7 @@ import {
   Get,
   HttpCode,
   HttpStatus,
+  Logger,
   Param,
   Patch,
   Post,
@@ -22,6 +23,8 @@ import { PropositionsService } from './propositions.service';
 @Controller('propositions')
 @UseGuards(AuthGuard('jwt'))
 export class PropositionsController {
+  private readonly logger = new Logger(PropositionsController.name);
+
   constructor(private readonly propositions: PropositionsService) {}
 
   @Get()
@@ -92,8 +95,41 @@ export class PropositionsController {
     return this.propositions.patch(id, dto, req.user);
   }
 
+  /** Suppression par numéro officiel (ex. PROP-2026-011) — route dédiée avant :id. */
+  @Delete('by-numero/:numero')
+  removeByNumero(
+    @Param('numero') numero: string,
+    @Req() req: { user: AppUser },
+  ) {
+    this.logger.log(
+      `DELETE /propositions/by-numero/${numero} (user ${req.user.id})`,
+    );
+    return this.propositions.remove(numero, req.user);
+  }
+
   @Delete(':id')
-  remove(@Param('id') id: string, @Req() req: { user: AppUser }) {
-    return this.propositions.remove(id, req.user);
+  remove(@Param('id') ref: string, @Req() req: { user: AppUser }) {
+    this.logger.log(`DELETE /propositions/${ref} (user ${req.user.id})`);
+    return this.propositions.remove(ref, req.user);
+  }
+
+  /** Alias si le front ou un proxy bloque la méthode HTTP DELETE. */
+  @Post(':id/delete')
+  @HttpCode(HttpStatus.OK)
+  removePost(@Param('id') ref: string, @Req() req: { user: AppUser }) {
+    this.logger.log(`POST /propositions/${ref}/delete (user ${req.user.id})`);
+    return this.propositions.remove(ref, req.user);
+  }
+
+  @Post('by-numero/:numero/delete')
+  @HttpCode(HttpStatus.OK)
+  removeByNumeroPost(
+    @Param('numero') numero: string,
+    @Req() req: { user: AppUser },
+  ) {
+    this.logger.log(
+      `POST /propositions/by-numero/${numero}/delete (user ${req.user.id})`,
+    );
+    return this.propositions.remove(numero, req.user);
   }
 }

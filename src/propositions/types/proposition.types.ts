@@ -17,6 +17,20 @@ export type PropositionIntroduction = {
   objectifProspects: number;
 };
 
+export type PropositionSection2Bloc = {
+  titre: string;
+  intro: string;
+  points: string[];
+};
+
+/** Section 2 — campagnes Meta (remplace l’ancien champ unique `texte`). */
+export type PropositionSection2Campagnes = {
+  intro: string;
+  approcheIntro: string;
+  blocs: PropositionSection2Bloc[];
+  conclusion: string;
+};
+
 export type PropositionStrategie = {
   section1CreationContenu: {
     description: string;
@@ -24,7 +38,7 @@ export type PropositionStrategie = {
     videosMax: number;
     topics: string[];
   };
-  section2CampagnesPublicitaires: { texte: string };
+  section2CampagnesPublicitaires: PropositionSection2Campagnes;
   section3FunnelMarketing: {
     intro: string;
     criteres: string[];
@@ -38,6 +52,7 @@ export type PropositionStrategie = {
 
 export type PropositionTarifLigne = {
   service: string;
+  detail?: string;
   prixInitial: string;
   prixOffert: string;
 };

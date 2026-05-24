@@ -2,6 +2,7 @@ import { BadRequestException, Logger, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
+import { flattenValidationErrors } from './common/utils/validation-errors';
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
@@ -20,17 +21,30 @@ async function bootstrap() {
       transform: true,
       forbidNonWhitelisted: true,
       exceptionFactory: (errors) => {
-        const first = errors[0];
-        const msg = first
-          ? (Object.values(first.constraints ?? {})[0] as string)
-          : 'Corps de requête invalide';
+        const lines = flattenValidationErrors(errors);
+        const msg =
+          lines[0] ??
+          (errors[0]
+            ? (Object.values(errors[0].constraints ?? {})[0] as string)
+            : undefined) ??
+          'Corps de requête invalide';
         return new BadRequestException({ message: msg });
       },
     }),
   );
   app.useGlobalFilters(new HttpExceptionFilter());
-  const port = process.env.PORT ?? 3002;
+  app.enableShutdownHooks();
+
+  const port = Number(process.env.PORT ?? 3002);
   await app.listen(port);
   logger.log(`Application démarrée sur le port ${port}`);
+
+  const shutdown = async (signal: string) => {
+    logger.log(`${signal} reçu — fermeture du serveur…`);
+    await app.close();
+    process.exit(0);
+  };
+  process.once('SIGINT', () => void shutdown('SIGINT'));
+  process.once('SIGTERM', () => void shutdown('SIGTERM'));
 }
 bootstrap();
