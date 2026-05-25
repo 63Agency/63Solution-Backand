@@ -10,19 +10,9 @@ import { normalizePhoneNumber } from './utils/phone';
 @Injectable()
 export class MetaService {
   private readonly logger = new Logger(MetaService.name);
-  private readonly accessToken: string;
-  private readonly phoneNumberId: string;
-  private readonly graphVersion: string;
 
-  constructor(private readonly config: ConfigService) {
-    this.accessToken =
-      this.config.get<string>('META_ACCESS_TOKEN')?.trim() ?? '';
-    this.phoneNumberId =
-      this.config.get<string>('META_PHONE_NUMBER_ID')?.trim() ?? '';
-    this.graphVersion =
-      this.config.get<string>('META_GRAPH_API_VERSION')?.trim() || 'v18.0';
-
-    if (!this.accessToken || !this.phoneNumberId) {
+  constructor(private readonly configService: ConfigService) {
+    if (!this.isConfigured()) {
       this.logger.warn(
         'META_ACCESS_TOKEN ou META_PHONE_NUMBER_ID manquant — envoi WhatsApp désactivé.',
       );
@@ -30,11 +20,15 @@ export class MetaService {
   }
 
   isConfigured(): boolean {
-    return Boolean(this.accessToken && this.phoneNumberId);
+    const accessToken =
+      this.configService.get<string>('META_ACCESS_TOKEN')?.trim() ?? '';
+    const phoneNumberId =
+      this.configService.get<string>('META_PHONE_NUMBER_ID')?.trim() ?? '';
+    return Boolean(accessToken && phoneNumberId);
   }
 
   getVerifyToken(): string {
-    return this.config.get<string>('META_VERIFY_TOKEN')?.trim() ?? '';
+    return this.configService.get<string>('META_VERIFY_TOKEN')?.trim() ?? '';
   }
 
   verifyWebhook(
@@ -58,7 +52,15 @@ export class MetaService {
     toPhone: string,
     messageText: string,
   ): Promise<MetaSendMessageResult> {
-    if (!this.isConfigured()) {
+    const accessToken =
+      this.configService.get<string>('META_ACCESS_TOKEN')?.trim() ?? '';
+    const phoneNumberId =
+      this.configService.get<string>('META_PHONE_NUMBER_ID')?.trim() ?? '';
+    const graphVersion =
+      this.configService.get<string>('META_GRAPH_API_VERSION')?.trim() ||
+      'v18.0';
+
+    if (!accessToken || !phoneNumberId) {
       throw new ServiceUnavailableException({
         message:
           'Meta WhatsApp non configuré (META_ACCESS_TOKEN / META_PHONE_NUMBER_ID).',
@@ -72,12 +74,12 @@ export class MetaService {
       });
     }
 
-    const url = `https://graph.facebook.com/${this.graphVersion}/${encodeURIComponent(this.phoneNumberId)}/messages`;
+    const url = `https://graph.facebook.com/${graphVersion}/${encodeURIComponent(phoneNumberId)}/messages`;
 
     const res = await fetch(url, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${this.accessToken}`,
+        Authorization: `Bearer ${accessToken}`,
         'Content-Type': 'application/json',
         Accept: 'application/json',
       },
