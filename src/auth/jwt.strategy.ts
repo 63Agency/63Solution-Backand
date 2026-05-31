@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { SupabaseService } from '../supabase/supabase.service';
+import { USER_PUBLIC_COLUMNS } from '../common/utils/user-response';
 import type { AppUser } from './types/app-user';
 
 @Injectable()
@@ -26,7 +27,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     const { data, error } = await this.supabase
       .getClient()
       .from('users')
-      .select('id, email, role')
+      .select(USER_PUBLIC_COLUMNS)
       .eq('id', payload.sub)
       .maybeSingle();
 
@@ -38,6 +39,10 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       id: data.id as string,
       email: data.email as string,
       role: (data.role as string) ?? 'user',
+      prenom: (data.prenom as string | null) ?? null,
+      nom: (data.nom as string | null) ?? null,
+      telephone: (data.telephone as string | null) ?? null,
+      ville: (data.ville as string | null) ?? null,
     };
   }
 }

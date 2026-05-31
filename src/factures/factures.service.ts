@@ -9,7 +9,7 @@ import { randomUUID } from 'node:crypto';
 import type { AppUser } from '../auth/types/app-user';
 import { SendDocumentEmailDto } from '../common/dto/send-document-email.dto';
 import { MailerService } from '../common/mailer/mailer.service';
-import { isAdminRole } from '../common/utils/roles';
+import { assertFullAdmin } from '../common/utils/access';
 import { SupabaseService } from '../supabase/supabase.service';
 import type { FromDevisTransferDto } from './dto/from-devis-transfer.dto';
 import type { FactureLineDto } from './dto/facture-line.dto';
@@ -116,17 +116,14 @@ export class FacturesService {
   }
 
   async list(user: AppUser) {
+    assertFullAdmin(user);
     const sb = this.supabase.getClient();
-    let query = sb
+    const { data, error } = await sb
       .from('factures')
       .select(
         'id, numero, status, client_nom, client_ice, client_email, client_telephone, date_emission, total_ht, montant_tva, total_ttc, created_by',
       )
       .order('created_at', { ascending: false });
-
-    if (!isAdminRole(user.role)) query = query.eq('created_by', user.id);
-
-    const { data, error } = await query;
     if (error) throw new ConflictException({ message: error.message });
 
     return {
@@ -203,14 +200,12 @@ export class FacturesService {
     return `${newPrefix}${String(maxN + 1).padStart(4, '0')}`;
   }
 
-  private ensureOwnership(row: FactureRow, user: AppUser): void {
-    if (isAdminRole(user.role)) return;
-    if (row.created_by !== user.id) throw new ForbiddenException({ message: 'Interdit' });
+  private ensureOwnership(_row: FactureRow, user: AppUser): void {
+    assertFullAdmin(user);
   }
 
-  private ensureDevisOwnership(row: DevisSourceRow, user: AppUser): void {
-    if (isAdminRole(user.role)) return;
-    if (row.created_by !== user.id) throw new ForbiddenException({ message: 'Interdit' });
+  private ensureDevisOwnership(_row: DevisSourceRow, user: AppUser): void {
+    assertFullAdmin(user);
   }
 
   private async byIdOr404(id: string): Promise<FactureRow> {
@@ -257,6 +252,7 @@ export class FacturesService {
   }
 
   async create(dto: UpsertFactureDto, user: AppUser) {
+    assertFullAdmin(user);
     const { lignes, totals } = this.compute(dto);
     const year = new Date(dto.dateEmission).getUTCFullYear();
     let lastError: string | null = null;

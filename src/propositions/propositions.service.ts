@@ -7,7 +7,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import type { AppUser } from '../auth/types/app-user';
-import { isAdminRole } from '../common/utils/roles';
+import { assertFullAdmin } from '../common/utils/access';
 import { SupabaseService } from '../supabase/supabase.service';
 import { SendDocumentEmailDto } from '../common/dto/send-document-email.dto';
 import { MailerService } from '../common/mailer/mailer.service';
@@ -109,11 +109,8 @@ export class PropositionsService {
     return { clientNom, nomEtablissement };
   }
 
-  private ensureOwnership(row: PropositionRow, user: AppUser): void {
-    if (isAdminRole(user.role)) return;
-    if (row.created_by !== user.id) {
-      throw new ForbiddenException({ message: 'Interdit' });
-    }
+  private ensureOwnership(_row: PropositionRow, user: AppUser): void {
+    assertFullAdmin(user);
   }
 
   private async byIdOr404(id: string): Promise<PropositionRow> {
@@ -138,15 +135,13 @@ export class PropositionsService {
     if (isUuid(raw)) return raw;
 
     const numero = normalizeNumero(raw);
-    let query = this.supabase
+    assertFullAdmin(user);
+    const { data, error } = await this.supabase
       .getClient()
       .from('propositions')
       .select('id, created_by')
-      .eq('numero', numero);
-    if (!isAdminRole(user.role)) {
-      query = query.eq('created_by', user.id);
-    }
-    const { data, error } = await query.maybeSingle();
+      .eq('numero', numero)
+      .maybeSingle();
     if (error) {
       throw new ConflictException({ message: error.message });
     }
@@ -255,19 +250,14 @@ export class PropositionsService {
   }
 
   async list(user: AppUser) {
-    let query = this.supabase
+    assertFullAdmin(user);
+    const { data, error } = await this.supabase
       .getClient()
       .from('propositions')
       .select(
         'id, numero, status, titre_proposition, nom_etablissement, client_nom, prepare_pour, date_emission, created_at',
       )
       .order('created_at', { ascending: false });
-
-    if (!isAdminRole(user.role)) {
-      query = query.eq('created_by', user.id);
-    }
-
-    const { data, error } = await query;
     if (error) {
       throw new ConflictException({ message: error.message });
     }
@@ -291,6 +281,7 @@ export class PropositionsService {
   }
 
   async create(dto: UpsertPropositionDto, user: AppUser) {
+    assertFullAdmin(user);
     const names = this.resolveClientNames(dto);
     const year = new Date(dto.dateEmission).getUTCFullYear();
     const fields = this.dtoToDb(dto, names);

@@ -10,6 +10,7 @@ import { DevisModule } from './devis/devis.module';
 import { FacturesModule } from './factures/factures.module';
 import { PropositionsModule } from './propositions/propositions.module';
 import { SupabaseModule } from './supabase/supabase.module';
+import { UsersModule } from './users/users.module';
 import { WhatsappModule  } from './whatsapp/whatsapp.module';
 
 @Module({
@@ -25,6 +26,7 @@ import { WhatsappModule  } from './whatsapp/whatsapp.module';
     DevisModule,
     FacturesModule,
     PropositionsModule,
+    UsersModule,
     WhatsappModule,
   ],
   controllers: [AppController],

@@ -7,16 +7,19 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import { recommendedRoute } from '../common/utils/roles';
+import {
+  mapUserToMe,
+  USER_PUBLIC_COLUMNS,
+  type UserDbRow,
+} from '../common/utils/user-response';
 import { SupabaseService } from '../supabase/supabase.service';
+import { ChangePasswordDto } from './dto/change-password.dto';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import type { AppUser } from './types/app-user';
 
-type UserRow = {
-  id: string;
-  email: string;
+type UserRow = UserDbRow & {
   password_hash: string;
-  role: string;
 };
 
 @Injectable()
@@ -42,7 +45,7 @@ export class AuthService {
     const password_hash = await bcrypt.hash(dto.password, 10);
     const { data, error } = await sb
       .from('users')
-      .insert({ email, password_hash, role: 'user' })
+      .insert({ email, password_hash, role: 'admin_whatsapp' })
       .select('id')
       .single();
 
@@ -66,7 +69,7 @@ export class AuthService {
 
     const { data: row, error } = await sb
       .from('users')
-      .select('id, email, password_hash, role')
+      .select(`${USER_PUBLIC_COLUMNS}, password_hash`)
       .eq('email', email)
       .maybeSingle();
 
@@ -89,31 +92,68 @@ export class AuthService {
       email: user.email,
     });
 
-    const role = user.role?.trim() || null;
+    const mapped = mapUserToMe(user);
 
     return {
       accessToken,
       refreshToken: null as string | null,
       expiresIn: null as number | null,
       tokenType: 'Bearer' as const,
-      user: {
-        id: user.id,
-        email: user.email,
-        role,
-      },
-      route: recommendedRoute(role),
+      user: mapped,
+      route: recommendedRoute(mapped.role),
     };
   }
 
   me(user: AppUser) {
-    const role = user.role?.trim() || null;
+    const mapped = mapUserToMe(user);
     return {
-      user: {
-        id: user.id,
-        email: user.email,
-        role,
-      },
-      route: recommendedRoute(role),
+      user: mapped,
+      route: recommendedRoute(mapped.role),
     };
+  }
+
+  async changePassword(user: AppUser, dto: ChangePasswordDto): Promise<void> {
+    if (dto.currentPassword === dto.newPassword) {
+      throw new BadRequestException({
+        message:
+          'Le nouveau mot de passe doit être différent de l’actuel.',
+      });
+    }
+
+    const { data: row, error } = await this.supabase
+      .getClient()
+      .from('users')
+      .select('password_hash')
+      .eq('id', user.id)
+      .maybeSingle();
+
+    if (error || !row) {
+      throw new UnauthorizedException({
+        message: 'Mot de passe actuel incorrect.',
+      });
+    }
+
+    const ok = await bcrypt.compare(
+      dto.currentPassword,
+      row.password_hash as string,
+    );
+    if (!ok) {
+      throw new UnauthorizedException({
+        message: 'Mot de passe actuel incorrect.',
+      });
+    }
+
+    const password_hash = await bcrypt.hash(dto.newPassword, 10);
+    const { error: updateError } = await this.supabase
+      .getClient()
+      .from('users')
+      .update({ password_hash })
+      .eq('id', user.id);
+
+    if (updateError) {
+      throw new BadRequestException({
+        message: updateError.message ?? 'Changement de mot de passe impossible.',
+      });
+    }
   }
 }

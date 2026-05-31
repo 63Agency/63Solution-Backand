@@ -1,12 +1,11 @@
 import {
   ConflictException,
-  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
 } from '@nestjs/common';
 import type { AppUser } from '../auth/types/app-user';
-import { isAdminRole } from '../common/utils/roles';
+import { assertFullAdmin } from '../common/utils/access';
 import { SupabaseService } from '../supabase/supabase.service';
 import type { CreateClientDto } from './dto/create-client.dto';
 import type { UpdateClientDto } from './dto/update-client.dto';
@@ -41,17 +40,12 @@ export class ClientsService {
   constructor(private readonly supabase: SupabaseService) {}
 
   async list(user: AppUser) {
+    assertFullAdmin(user);
     const sb = this.supabase.getClient();
-    let query = sb
+    const { data, error } = await sb
       .from('clients')
       .select('id, client_nom, client_email, client_telephone, client_ice, created_by')
       .order('updated_at', { ascending: false });
-
-    if (!isAdminRole(user.role)) {
-      query = query.eq('created_by', user.id);
-    }
-
-    const { data, error } = await query;
     if (error) {
       throw new ConflictException({ message: error.message });
     }
@@ -68,6 +62,7 @@ export class ClientsService {
   }
 
   async create(dto: CreateClientDto, user: AppUser) {
+    assertFullAdmin(user);
     const nom = clean(dto.clientNom);
     if (!nom) {
       throw new ConflictException({ message: 'clientNom requis' });
@@ -149,16 +144,9 @@ export class ClientsService {
     return data as ClientRow;
   }
 
-  private ensureClientAccess(row: ClientRow, user: AppUser): void {
-    if (isAdminRole(user.role)) return;
-    if (row.created_by !== user.id) {
-      throw new ForbiddenException({ message: 'Interdit' });
-    }
-  }
-
   async update(id: string, dto: UpdateClientDto, user: AppUser) {
+    assertFullAdmin(user);
     const row = await this.byIdOr404(id);
-    this.ensureClientAccess(row, user);
 
     const nom = clean(dto.clientNom);
     if (!nom) {
@@ -230,8 +218,8 @@ export class ClientsService {
   }
 
   async remove(id: string, user: AppUser) {
-    const row = await this.byIdOr404(id);
-    this.ensureClientAccess(row, user);
+    assertFullAdmin(user);
+    await this.byIdOr404(id);
 
     /** Indépendant de devis / factures / propositions : suppression du client seule. */
     const { error } = await this.supabase.getClient().from('clients').delete().eq('id', id);

@@ -1,6 +1,5 @@
 import {
   ConflictException,
-  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -9,7 +8,7 @@ import { SendDocumentEmailDto } from '../common/dto/send-document-email.dto';
 import { MailerService } from '../common/mailer/mailer.service';
 import { SupabaseService } from '../supabase/supabase.service';
 import type { AppUser } from '../auth/types/app-user';
-import { isAdminRole } from '../common/utils/roles';
+import { assertFullAdmin } from '../common/utils/access';
 import { UpsertDevisDto } from './dto/upsert-devis.dto';
 import type { DevisLineComputed, DevisTotals } from './types/devis.types';
 import { renderDevisPdf } from './devis.pdf';
@@ -67,19 +66,14 @@ export class DevisService {
   ) {}
 
   async list(user: AppUser) {
+    assertFullAdmin(user);
     const sb = this.supabase.getClient();
-    let query = sb
+    const { data, error } = await sb
       .from('devis')
       .select(
         'id, numero, status, client_nom, client_ice, client_email, client_telephone, date_emission, total_ttc, created_by',
       )
       .order('created_at', { ascending: false });
-
-    if (!isAdminRole(user.role)) {
-      query = query.eq('created_by', user.id);
-    }
-
-    const { data, error } = await query;
     if (error) {
       throw new ConflictException({ message: error.message });
     }
@@ -144,11 +138,8 @@ export class DevisService {
     return `${newPrefix}${String(maxN + 1).padStart(4, '0')}`;
   }
 
-  private ensureOwnership(row: DevisRow, user: AppUser): void {
-    if (isAdminRole(user.role)) return;
-    if (row.created_by !== user.id) {
-      throw new ForbiddenException({ message: 'Interdit' });
-    }
+  private ensureOwnership(_row: DevisRow, user: AppUser): void {
+    assertFullAdmin(user);
   }
 
   private async byIdOr404(id: string): Promise<DevisRow> {
@@ -165,6 +156,7 @@ export class DevisService {
   }
 
   async create(dto: UpsertDevisDto, user: AppUser) {
+    assertFullAdmin(user);
     const sb = this.supabase.getClient();
     const { lignes, totals } = this.compute(dto);
     const year = new Date(dto.dateEmission).getUTCFullYear();
