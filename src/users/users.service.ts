@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Injectable,
@@ -26,6 +27,20 @@ export class UsersService {
     assertFullAdmin(user);
   }
 
+  private resolveAvatarUrl(
+    raw: string | null | undefined,
+  ): string | null | undefined {
+    if (raw === undefined) return undefined;
+    const trimmed = raw === null ? '' : String(raw).trim();
+    if (!trimmed) return null;
+    if (!/^https?:\/\//i.test(trimmed)) {
+      throw new BadRequestException({
+        message: 'avatarUrl doit être une URL http(s) valide.',
+      });
+    }
+    return trimmed;
+  }
+
   async updateMe(user: AppUser, dto: UpdateProfileDto) {
     const prenom = dto.prenom.trim();
     const nom = dto.nom.trim();
@@ -33,10 +48,21 @@ export class UsersService {
       dto.telephone === undefined ? null : String(dto.telephone).trim();
     const ville = dto.ville === undefined ? null : String(dto.ville).trim();
 
+    const patch: Record<string, unknown> = {
+      prenom,
+      nom,
+      telephone,
+      ville,
+    };
+    const avatarUrl = this.resolveAvatarUrl(dto.avatarUrl);
+    if (avatarUrl !== undefined) {
+      patch.avatar_url = avatarUrl;
+    }
+
     const { data, error } = await this.supabase
       .getClient()
       .from('users')
-      .update({ prenom, nom, telephone, ville })
+      .update(patch)
       .eq('id', user.id)
       .select(USER_PUBLIC_COLUMNS)
       .single();

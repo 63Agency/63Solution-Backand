@@ -6,4 +6,5 @@ export type AppUser = {
   nom: string | null;
   telephone: string | null;
   ville: string | null;
+  avatarUrl: string | null;
 };

@@ -104,8 +104,21 @@ export class AuthService {
     };
   }
 
-  me(user: AppUser) {
-    const mapped = mapUserToMe(user);
+  async me(user: AppUser) {
+    const { data, error } = await this.supabase
+      .getClient()
+      .from('users')
+      .select(USER_PUBLIC_COLUMNS)
+      .eq('id', user.id)
+      .maybeSingle();
+
+    if (error || !data) {
+      throw new UnauthorizedException({
+        message: 'Session invalide.',
+      });
+    }
+
+    const mapped = mapUserToMe(data as UserDbRow);
     return {
       user: mapped,
       route: recommendedRoute(mapped.role),

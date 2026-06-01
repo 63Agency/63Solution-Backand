@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import { IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
 
 export class UpdateProfileDto {
   @IsString({ message: 'prénom requis' })
@@ -16,4 +16,10 @@ export class UpdateProfileDto {
   @IsOptional()
   @IsString()
   ville?: string;
+
+  /** URL HTTPS (ex. Cloudinary). Chaîne vide ou `null` pour supprimer la photo. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(2048)
+  avatarUrl?: string | null;
 }

@@ -43,6 +43,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       nom: (data.nom as string | null) ?? null,
       telephone: (data.telephone as string | null) ?? null,
       ville: (data.ville as string | null) ?? null,
+      avatarUrl: (data.avatar_url as string | null)?.trim() || null,
     };
   }
 }
