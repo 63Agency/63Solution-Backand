@@ -12,7 +12,7 @@ Front envoi     → Nest → Meta Graph API (pas d’appel Meta depuis le naviga
 
 ## Setup
 
-1. Exécuter `sql/014-whatsapp-tables.sql` dans Supabase.
+1. Exécuter `sql/014-whatsapp-tables.sql` puis `sql/017-notifications-table.sql` dans Supabase.
 2. `.env` :
    - `META_VERIFY_TOKEN` — chaîne aléatoire (même valeur dans Meta Developer → Webhook)
    - `META_ACCESS_TOKEN` — token Graph API (celui utilisé dans N8N)
@@ -50,7 +50,21 @@ Traite le payload `whatsapp_business_account` :
 | GET | `/whatsapp/conversations/:id` | Détail |
 | GET | `/whatsapp/conversations/:id/messages` | Messages |
 | POST | `/whatsapp/conversations/:id/messages` | `{ "text": "..." }` → Meta + save outbound |
-| PATCH | `/whatsapp/conversations/:id/read` | `unread_count = 0` |
+| PATCH | `/whatsapp/conversations/:id/read` | `unread_count = 0` + notifications liées lues |
+
+Chaque message **inbound** (webhook Meta) met à jour `last_message_text`, `last_message_at`, incrémente `unread_count`, et crée une ligne `notifications` (`type: whatsapp.message`). Les messages **outbound** (POST messages) ne touchent pas `unread_count`.
+
+## API Notifications (JWT)
+
+Exécuter `sql/017-notifications-table.sql` dans Supabase.
+
+| Méthode | Route | Description |
+|---------|--------|-------------|
+| GET | `/notifications?limit=50` | `{ unreadCount, items[] }` |
+| PATCH | `/notifications/:id/read` | Marquer une notification lue |
+| PATCH | `/notifications/read-all` | Tout marquer lu |
+
+Exemple item : `type: whatsapp.message`, `href: /dashboard/conversations?c={uuid}`, `meta: { conversationId, phoneNumber, messageId? }`.
 
 ## Envoi Meta Graph API
 

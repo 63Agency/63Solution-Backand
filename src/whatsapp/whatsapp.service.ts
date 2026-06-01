@@ -4,6 +4,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { NotificationsService } from '../notifications/notifications.service';
 import { SupabaseService } from '../supabase/supabase.service';
 import { SendWhatsappMessageDto } from './dto/send-whatsapp-message.dto';
 import type {
@@ -152,6 +153,7 @@ export class WhatsappService {
   constructor(
     private readonly supabase: SupabaseService,
     private readonly meta: MetaService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   verifyMetaWebhook(
@@ -276,6 +278,7 @@ export class WhatsappService {
         message: error?.message ?? 'Mise à jour impossible',
       });
     }
+    await this.notifications.markReadByConversationId(conv.id);
     return mapConversation(data as ConversationRow);
   }
 
@@ -464,6 +467,22 @@ export class WhatsappService {
         sentAt,
         incrementUnread: false,
       });
+
+      try {
+        await this.notifications.createWhatsappMessageNotification({
+          conversationId: conv.id,
+          phoneNumber: phone,
+          contactName: conv.contact_name,
+          body: text,
+          messageId: metaMessageId || null,
+          createdAt: sentAt,
+        });
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.logger.warn(
+          `${prefix} notification create failed conversationId=${conv.id}: ${message}`,
+        );
+      }
     }
   }
 
