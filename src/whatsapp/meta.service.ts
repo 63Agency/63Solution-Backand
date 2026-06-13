@@ -7,6 +7,26 @@ import { ConfigService } from '@nestjs/config';
 import type { MetaSendMessageResult } from './types/whatsapp.types';
 import { normalizePhoneNumber } from './utils/phone';
 
+const WHATCHIMP_SEND_URL =
+  'https://app.whatchimp.com/api/v1/whatsapp/send';
+
+function pickMessageId(raw: Record<string, unknown>): string | null {
+  const candidates: unknown[] = [
+    raw.id,
+    raw.message_id,
+    raw.messageId,
+  ];
+  const data = raw.data;
+  if (data && typeof data === 'object') {
+    const d = data as Record<string, unknown>;
+    candidates.push(d.id, d.message_id, d.messageId);
+  }
+  for (const c of candidates) {
+    if (typeof c === 'string' && c.trim()) return c.trim();
+  }
+  return null;
+}
+
 @Injectable()
 export class MetaService {
   private readonly logger = new Logger(MetaService.name);
@@ -14,104 +34,87 @@ export class MetaService {
   constructor(private readonly configService: ConfigService) {
     if (!this.isConfigured()) {
       this.logger.warn(
-        'META_ACCESS_TOKEN ou META_PHONE_NUMBER_ID manquant — envoi WhatsApp désactivé.',
+        'WHATCHIMP_API_KEY ou WHATCHIMP_PHONE_NUMBER_ID manquant — envoi WhatsApp désactivé.',
       );
     }
   }
 
   isConfigured(): boolean {
-    const accessToken =
-      this.configService.get<string>('META_ACCESS_TOKEN')?.trim() ?? '';
+    const apiKey =
+      this.configService.get<string>('WHATCHIMP_API_KEY')?.trim() ?? '';
     const phoneNumberId =
-      this.configService.get<string>('META_PHONE_NUMBER_ID')?.trim() ?? '';
-    return Boolean(accessToken && phoneNumberId);
+      this.configService.get<string>('WHATCHIMP_PHONE_NUMBER_ID')?.trim() ?? '';
+    return Boolean(apiKey && phoneNumberId);
   }
 
   getVerifyToken(): string {
-    return this.configService.get<string>('META_VERIFY_TOKEN')?.trim() ?? '';
+    return '';
   }
 
+  /** WhatChimp n'utilise pas le hub challenge Meta — accepter toute requête GET. */
   verifyWebhook(
-    mode: string | undefined,
-    token: string | undefined,
+    _mode: string | undefined,
+    _token: string | undefined,
     challenge: string | undefined,
   ): string | null {
-    const expected = this.getVerifyToken();
-    if (
-      mode === 'subscribe' &&
-      expected &&
-      token === expected &&
-      challenge?.trim()
-    ) {
-      return challenge;
-    }
-    return null;
+    return challenge?.trim() || 'ok';
   }
 
   async sendTextMessage(
     toPhone: string,
     messageText: string,
   ): Promise<MetaSendMessageResult> {
-    const accessToken =
-      this.configService.get<string>('META_ACCESS_TOKEN')?.trim() ?? '';
+    const apiKey =
+      this.configService.get<string>('WHATCHIMP_API_KEY')?.trim() ?? '';
     const phoneNumberId =
-      this.configService.get<string>('META_PHONE_NUMBER_ID')?.trim() ?? '';
-    const graphVersion =
-      this.configService.get<string>('META_GRAPH_API_VERSION')?.trim() ||
-      'v18.0';
+      this.configService.get<string>('WHATCHIMP_PHONE_NUMBER_ID')?.trim() ?? '';
 
-    if (!accessToken || !phoneNumberId) {
+    if (!apiKey || !phoneNumberId) {
       throw new ServiceUnavailableException({
         message:
-          'Meta WhatsApp non configuré (META_ACCESS_TOKEN / META_PHONE_NUMBER_ID).',
+          'WhatChimp non configuré (WHATCHIMP_API_KEY / WHATCHIMP_PHONE_NUMBER_ID).',
       });
     }
 
-    const to = normalizePhoneNumber(toPhone);
-    if (!to) {
+    const phone = normalizePhoneNumber(toPhone);
+    if (!phone) {
       throw new ServiceUnavailableException({
         message: 'Numéro WhatsApp invalide.',
       });
     }
 
-    const url = `https://graph.facebook.com/${graphVersion}/${encodeURIComponent(phoneNumberId)}/messages`;
+    const body = new URLSearchParams({
+      apiToken: apiKey,
+      phone_number_id: phoneNumberId,
+      phone_number: phone,
+      message: messageText,
+    });
 
-    const res = await fetch(url, {
+    const res = await fetch(WHATCHIMP_SEND_URL, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
+        'Content-Type': 'application/x-www-form-urlencoded',
         Accept: 'application/json',
       },
-      body: JSON.stringify({
-        messaging_product: 'whatsapp',
-        recipient_type: 'individual',
-        to,
-        type: 'text',
-        text: { preview_url: false, body: messageText },
-      }),
+      body: body.toString(),
     });
 
     const raw = (await res.json().catch(() => ({}))) as Record<string, unknown>;
     if (!res.ok) {
-      const errObj = raw.error as Record<string, unknown> | undefined;
       const detail =
-        typeof errObj?.message === 'string'
-          ? errObj.message
-          : JSON.stringify(raw).slice(0, 300);
-      this.logger.warn(`Meta sendMessage ${res.status}: ${detail}`);
+        typeof raw.message === 'string'
+          ? raw.message
+          : typeof raw.error === 'string'
+            ? raw.error
+            : JSON.stringify(raw).slice(0, 300);
+      this.logger.warn(`WhatChimp sendMessage ${res.status}: ${detail}`);
       throw new ServiceUnavailableException({
-        message: `Meta: envoi impossible (${res.status}).`,
+        message: `WhatChimp: envoi impossible (${res.status}).`,
       });
     }
 
-    const messages = Array.isArray(raw.messages) ? raw.messages : [];
-    const first = messages[0] as Record<string, unknown> | undefined;
-    const whatsappMessageId =
-      typeof first?.id === 'string' ? first.id : null;
-
     return {
-      whatsappMessageId,
+      whatsappMessageId: pickMessageId(raw),
       text: messageText,
       status: 'sent',
       sentAt: new Date().toISOString(),
