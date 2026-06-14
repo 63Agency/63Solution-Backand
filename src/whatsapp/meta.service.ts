@@ -12,6 +12,7 @@ const WHATCHIMP_SEND_URL =
 
 function pickMessageId(raw: Record<string, unknown>): string | null {
   const candidates: unknown[] = [
+    raw.wa_message_id,
     raw.id,
     raw.message_id,
     raw.messageId,
@@ -100,16 +101,22 @@ export class MetaService {
     });
 
     const raw = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-    if (!res.ok) {
-      const detail =
-        typeof raw.message === 'string'
-          ? raw.message
-          : typeof raw.error === 'string'
-            ? raw.error
-            : JSON.stringify(raw).slice(0, 300);
+
+    const apiStatus = String(raw.status ?? '').trim();
+    const apiMessage =
+      typeof raw.message === 'string'
+        ? raw.message
+        : typeof raw.error === 'string'
+          ? raw.error
+          : null;
+
+    if (!res.ok || apiStatus === '0' || apiStatus === 'false') {
+      const detail = apiMessage ?? JSON.stringify(raw).slice(0, 300);
       this.logger.warn(`WhatChimp sendMessage ${res.status}: ${detail}`);
       throw new ServiceUnavailableException({
-        message: `WhatChimp: envoi impossible (${res.status}).`,
+        message: apiMessage
+          ? `WhatChimp: ${apiMessage}`
+          : `WhatChimp: envoi impossible (${res.status}).`,
       });
     }
 
