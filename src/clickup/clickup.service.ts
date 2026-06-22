@@ -37,6 +37,11 @@ function mapLeadRow(row: LeadRow): ClickUpLead {
   };
 }
 
+const CLICKUP_API = 'https://api.clickup.com/api/v2';
+const DEFAULT_TEAM_ID = '9012949492';
+
+type ClickUpListRef = { id: string; name: string };
+
 @Injectable()
 export class ClickupService {
   private readonly logger = new Logger(ClickupService.name);
@@ -45,6 +50,129 @@ export class ClickupService {
     private readonly supabase: SupabaseService,
     private readonly config: ConfigService,
   ) {}
+
+  private getApiToken(): string {
+    const token = this.config.get<string>('CLICKUP_API_TOKEN')?.trim() ?? '';
+    if (!token) {
+      throw new ServiceUnavailableException({
+        message: 'CLICKUP_API_TOKEN requis.',
+      });
+    }
+    return token;
+  }
+
+  private getTeamId(): string {
+    return (
+      this.config.get<string>('CLICKUP_TEAM_ID')?.trim() ?? DEFAULT_TEAM_ID
+    );
+  }
+
+  private async clickUpGet<T>(path: string): Promise<T> {
+    const url = `${CLICKUP_API}${path}`;
+    const res = await fetch(url, {
+      headers: {
+        Authorization: this.getApiToken(),
+        Accept: 'application/json',
+      },
+    });
+
+    const raw = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+    if (!res.ok) {
+      const detail =
+        typeof raw.err === 'string'
+          ? raw.err
+          : JSON.stringify(raw).slice(0, 300);
+      this.logger.warn(`ClickUp GET ${path} → ${res.status}: ${detail}`);
+      throw new ServiceUnavailableException({
+        message: `ClickUp API: ${path} (${res.status}).`,
+      });
+    }
+
+    return raw as T;
+  }
+
+  private async collectAllLists(teamId: string): Promise<ClickUpListRef[]> {
+    const lists: ClickUpListRef[] = [];
+    const spacesRes = await this.clickUpGet<{ spaces?: { id: string; name?: string }[] }>(
+      `/team/${encodeURIComponent(teamId)}/space?archived=false`,
+    );
+
+    for (const space of spacesRes.spaces ?? []) {
+      const spaceId = String(space.id);
+
+      const folderlessRes = await this.clickUpGet<{ lists?: { id: string; name?: string }[] }>(
+        `/space/${encodeURIComponent(spaceId)}/list?archived=false`,
+      );
+      for (const list of folderlessRes.lists ?? []) {
+        lists.push({ id: String(list.id), name: String(list.name ?? '') });
+      }
+
+      const foldersRes = await this.clickUpGet<{ folders?: { id: string; name?: string }[] }>(
+        `/space/${encodeURIComponent(spaceId)}/folder?archived=false`,
+      );
+      for (const folder of foldersRes.folders ?? []) {
+        const folderId = String(folder.id);
+        const folderListsRes = await this.clickUpGet<{ lists?: { id: string; name?: string }[] }>(
+          `/folder/${encodeURIComponent(folderId)}/list?archived=false`,
+        );
+        for (const list of folderListsRes.lists ?? []) {
+          lists.push({ id: String(list.id), name: String(list.name ?? '') });
+        }
+      }
+    }
+
+    return lists;
+  }
+
+  private async fetchAllTasksFromList(
+    listId: string,
+  ): Promise<Record<string, unknown>[]> {
+    const tasks: Record<string, unknown>[] = [];
+    let page = 0;
+    let lastPage = false;
+
+    while (!lastPage) {
+      const res = await this.clickUpGet<{
+        tasks?: Record<string, unknown>[];
+        last_page?: boolean;
+      }>(
+        `/list/${encodeURIComponent(listId)}/task?archived=false&include_closed=true&page=${page}`,
+      );
+
+      for (const task of res.tasks ?? []) {
+        tasks.push(task);
+      }
+
+      lastPage = res.last_page === true;
+      page += 1;
+    }
+
+    return tasks;
+  }
+
+  async syncAllLeads(): Promise<number> {
+    const teamId = this.getTeamId();
+    this.logger.log(`ClickUp sync starting for team=${teamId}`);
+
+    const lists = await this.collectAllLists(teamId);
+    this.logger.log(`ClickUp sync: ${lists.length} lists found`);
+
+    let synced = 0;
+    for (const list of lists) {
+      const tasks = await this.fetchAllTasksFromList(list.id);
+      this.logger.log(
+        `ClickUp sync: list=${list.name || list.id} tasks=${tasks.length}`,
+      );
+
+      for (const task of tasks) {
+        await this.saveOrUpdateLead(task);
+        synced += 1;
+      }
+    }
+
+    this.logger.log(`ClickUp sync complete: ${synced} leads synced`);
+    return synced;
+  }
 
   async resolveTaskFromWebhook(
     payload: Record<string, unknown>,
@@ -68,35 +196,9 @@ export class ClickupService {
   private async fetchTaskFromApi(
     taskId: string,
   ): Promise<Record<string, unknown>> {
-    const token = this.config.get<string>('CLICKUP_API_TOKEN')?.trim() ?? '';
-    if (!token) {
-      throw new ServiceUnavailableException({
-        message:
-          'CLICKUP_API_TOKEN requis pour récupérer les détails de la tâche (webhook minimal).',
-      });
-    }
-
-    const url = `https://api.clickup.com/api/v2/task/${encodeURIComponent(taskId)}`;
-    const res = await fetch(url, {
-      headers: {
-        Authorization: token,
-        Accept: 'application/json',
-      },
-    });
-
-    const raw = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-    if (!res.ok) {
-      const detail =
-        typeof raw.err === 'string'
-          ? raw.err
-          : JSON.stringify(raw).slice(0, 300);
-      this.logger.warn(`ClickUp fetch task ${res.status}: ${detail}`);
-      throw new ServiceUnavailableException({
-        message: `ClickUp API: impossible de charger la tâche (${res.status}).`,
-      });
-    }
-
-    return raw;
+    return this.clickUpGet<Record<string, unknown>>(
+      `/task/${encodeURIComponent(taskId)}`,
+    );
   }
 
   async saveOrUpdateLead(

@@ -7,8 +7,10 @@ import {
   Logger,
   Post,
   Req,
+  UseGuards,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { AuthGuard } from '@nestjs/passport';
 import { SkipThrottle } from '@nestjs/throttler';
 import type { Request } from 'express';
 import { ClickupService } from './clickup.service';
@@ -57,5 +59,13 @@ export class ClickupController {
 
     const lead = await this.clickup.handleWebhookEvent(payload);
     return { ok: true, event, leadId: lead?.id ?? null };
+  }
+
+  @Post('sync')
+  @UseGuards(AuthGuard('jwt'))
+  @HttpCode(HttpStatus.OK)
+  async syncAllLeads() {
+    const synced = await this.clickup.syncAllLeads();
+    return { ok: true, synced };
   }
 }
