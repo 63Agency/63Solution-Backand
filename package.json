@@ -18,7 +18,8 @@
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
-    "test:whatchimp": "jest meta.service.integration"
+    "test:whatchimp": "jest meta.service.integration",
+    "clickup:create-webhook": "ts-node src/clickup/scripts/create-webhook.ts"
   },
   "dependencies": {
     "@fontsource/roboto": "^5.2.10",
