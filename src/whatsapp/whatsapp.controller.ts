@@ -15,6 +15,7 @@ import {
 import { AuthGuard } from '@nestjs/passport';
 import type { AppUser } from '../auth/types/app-user';
 import { SendWhatsappMessageDto } from './dto/send-whatsapp-message.dto';
+import { BroadcastWhatsappMessageDto } from './dto/broadcast-whatsapp-message.dto';
 import { WhatsappService } from './whatsapp.service';
 
 @Controller('whatsapp')
@@ -48,6 +49,11 @@ export class WhatsappController {
     @Req() _req: { user: AppUser },
   ) {
     return this.whatsapp.sendMessage(id, dto);
+  }
+
+  @Post('broadcast')
+  broadcast(@Body() dto: BroadcastWhatsappMessageDto) {
+    return this.whatsapp.broadcastMessage(dto);
   }
 
   @Patch('conversations/:id/read')

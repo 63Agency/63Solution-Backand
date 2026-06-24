@@ -7,6 +7,7 @@ import {
 import { NotificationsService } from '../notifications/notifications.service';
 import { SupabaseService } from '../supabase/supabase.service';
 import { SendWhatsappMessageDto } from './dto/send-whatsapp-message.dto';
+import { BroadcastWhatsappMessageDto } from './dto/broadcast-whatsapp-message.dto';
 import type {
   MessageDirection,
   WhatsappConversation,
@@ -258,6 +259,88 @@ export class WhatsappService {
     });
 
     return message;
+  }
+
+  async broadcastMessage(dto: BroadcastWhatsappMessageDto): Promise<{
+    sent: number;
+    failed: number;
+    results: { phoneNumber: string; success: boolean; error?: string }[];
+  }> {
+    const text = dto.text.trim();
+    const results: { phoneNumber: string; success: boolean; error?: string }[] =
+      [];
+    const phones = dto.phoneNumbers.map((p) => String(p).trim()).filter(Boolean);
+
+    for (let i = 0; i < phones.length; i++) {
+      const phoneNumber = phones[i];
+      const phone = normalizePhoneNumber(phoneNumber);
+
+      if (!phone) {
+        results.push({
+          phoneNumber,
+          success: false,
+          error: 'Numéro WhatsApp invalide.',
+        });
+        if (i < phones.length - 1) {
+          await this.delay(300);
+        }
+        continue;
+      }
+
+      try {
+        const sent = await this.meta.sendTextMessage(phone, text);
+        const now = new Date().toISOString();
+        const sentAt = sent.sentAt ?? now;
+
+        const conv = await this.findOrCreateConversation({
+          phone,
+          contactName: null,
+          watiContactId: phone,
+          watiConversationId: null,
+          source: 'meta',
+          lastMessageText: sent.text,
+          lastMessageAt: sentAt,
+          incrementUnread: false,
+        });
+
+        await this.persistMessage({
+          conversationId: conv.id,
+          direction: 'outbound',
+          body: sent.text,
+          type: 'text',
+          status: sent.status,
+          watiMessageId: sent.whatsappMessageId,
+          watiLocalId: null,
+          sentAt,
+          incrementUnread: false,
+        });
+
+        results.push({ phoneNumber, success: true });
+      } catch (err: unknown) {
+        const error =
+          err instanceof Error ? err.message : 'Envoi impossible';
+        this.logger.warn(
+          `[broadcast] failed phone=${phoneNumber}: ${error}`,
+        );
+        results.push({ phoneNumber, success: false, error });
+      }
+
+      if (i < phones.length - 1) {
+        await this.delay(300);
+      }
+    }
+
+    const sent = results.filter((r) => r.success).length;
+    const failed = results.length - sent;
+    this.logger.log(
+      `[broadcast] complete sent=${sent} failed=${failed} total=${results.length}`,
+    );
+
+    return { sent, failed, results };
+  }
+
+  private delay(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   async markRead(conversationId: string): Promise<WhatsappConversation> {
