@@ -165,6 +165,13 @@ export class WhatsappService {
     return this.meta.verifyWebhook(mode, token, challenge);
   }
 
+  async listTemplates() {
+    this.logger.log('[templates] listTemplates requested');
+    const templates = await this.meta.listTemplates();
+    this.logger.log(`[templates] returning ${templates.length} template(s)`);
+    return { templates };
+  }
+
   async listConversations(): Promise<WhatsappConversation[]> {
     const { data, error } = await this.supabase
       .getClient()
@@ -266,7 +273,16 @@ export class WhatsappService {
     failed: number;
     results: { phoneNumber: string; success: boolean; error?: string }[];
   }> {
-    const text = dto.text.trim();
+    const templateName = dto.templateName?.trim() ?? '';
+    const isTemplate = Boolean(templateName);
+    const text = dto.text?.trim() ?? '';
+    const templateLanguage = dto.templateLanguage?.trim() || 'fr';
+    const variable1 = dto.variable1?.trim() || undefined;
+    const components = dto.components?.map((c) => ({
+      type: c.type,
+      parameters: c.parameters.map((p) => ({ type: p.type, text: p.text })),
+    }));
+
     const results: { phoneNumber: string; success: boolean; error?: string }[] =
       [];
     const phones = dto.phoneNumbers.map((p) => String(p).trim()).filter(Boolean);
@@ -288,7 +304,15 @@ export class WhatsappService {
       }
 
       try {
-        const sent = await this.meta.sendTextMessage(phone, text);
+        const sent = isTemplate
+          ? await this.meta.sendTemplateMessage(
+              phone,
+              templateName,
+              templateLanguage,
+              components,
+              variable1,
+            )
+          : await this.meta.sendTextMessage(phone, text);
         const now = new Date().toISOString();
         const sentAt = sent.sentAt ?? now;
 
@@ -307,7 +331,7 @@ export class WhatsappService {
           conversationId: conv.id,
           direction: 'outbound',
           body: sent.text,
-          type: 'text',
+          type: isTemplate ? 'template' : 'text',
           status: sent.status,
           watiMessageId: sent.whatsappMessageId,
           watiLocalId: null,
@@ -333,7 +357,7 @@ export class WhatsappService {
     const sent = results.filter((r) => r.success).length;
     const failed = results.length - sent;
     this.logger.log(
-      `[broadcast] complete sent=${sent} failed=${failed} total=${results.length}`,
+      `[broadcast] complete mode=${isTemplate ? 'template' : 'text'} sent=${sent} failed=${failed} total=${results.length}`,
     );
 
     return { sent, failed, results };

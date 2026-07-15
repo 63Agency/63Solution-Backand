@@ -23,6 +23,11 @@ import { WhatsappService } from './whatsapp.service';
 export class WhatsappController {
   constructor(private readonly whatsapp: WhatsappService) {}
 
+  @Get('templates')
+  listTemplates() {
+    return this.whatsapp.listTemplates();
+  }
+
   @Get('conversations')
   listConversations() {
     return this.whatsapp.listConversations();

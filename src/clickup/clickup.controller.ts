@@ -13,6 +13,8 @@ import { ConfigService } from '@nestjs/config';
 import { AuthGuard } from '@nestjs/passport';
 import { SkipThrottle } from '@nestjs/throttler';
 import type { Request } from 'express';
+import type { AppUser } from '../auth/types/app-user';
+import { assertFullAdmin } from '../common/utils/access';
 import { ClickupService } from './clickup.service';
 import { verifyClickUpSignature } from './utils/clickup-signature';
 
@@ -64,7 +66,8 @@ export class ClickupController {
   @Post('sync')
   @UseGuards(AuthGuard('jwt'))
   @HttpCode(HttpStatus.OK)
-  async syncAllLeads() {
+  async syncAllLeads(@Req() req: { user: AppUser }) {
+    assertFullAdmin(req.user);
     const synced = await this.clickup.syncAllLeads();
     return { ok: true, synced };
   }
