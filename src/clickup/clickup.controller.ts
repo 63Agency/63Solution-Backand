@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   ForbiddenException,
+  Get,
   HttpCode,
   HttpStatus,
   Logger,
@@ -29,6 +30,13 @@ export class ClickupController {
     private readonly clickup: ClickupService,
     private readonly config: ConfigService,
   ) {}
+
+  /** Public CORS probe — no JWT. */
+  @Get('test')
+  @HttpCode(HttpStatus.OK)
+  healthCheck() {
+    return { ok: true, timestamp: new Date().toISOString() };
+  }
 
   @Post('webhook')
   @HttpCode(HttpStatus.OK)

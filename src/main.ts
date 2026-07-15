@@ -18,10 +18,11 @@ async function bootstrap() {
         'http://localhost:3000',
         'http://localhost:3001',
       ];
+      // Do not pass Error here — Nest's global filter would respond without CORS headers.
       if (!origin || allowed.includes(origin)) {
         callback(null, true);
       } else {
-        callback(new Error('Not allowed by CORS'));
+        callback(null, false);
       }
     },
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
