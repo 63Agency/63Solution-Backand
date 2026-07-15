@@ -12,8 +12,20 @@ async function bootstrap() {
     rawBody: true,
   });
   app.enableCors({
-    origin: ['https://app.63agency.com', 'http://localhost:3000'],
+    origin: (origin, callback) => {
+      const allowed = [
+        'https://app.63agency.com',
+        'http://localhost:3000',
+        'http://localhost:3001',
+      ];
+      if (!origin || allowed.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error('Not allowed by CORS'));
+      }
+    },
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Authorization', 'Content-Type'],
     credentials: true,
   });
   app.useGlobalPipes(
