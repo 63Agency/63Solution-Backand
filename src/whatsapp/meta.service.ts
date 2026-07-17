@@ -179,7 +179,7 @@ export class MetaService {
     toPhone: string,
     templateName: string,
     language = 'fr',
-    components?: TemplateComponentInput[],
+    _components?: TemplateComponentInput[],
     variable1?: string,
   ): Promise<MetaSendMessageResult> {
     const accessToken = this.requireMetaAccessToken();
@@ -193,24 +193,21 @@ export class MetaService {
 
     const languageCode = language.trim() || 'fr';
 
-    // {{1}} is replaced by the first body text parameter (variable1).
-    // Templates with no variables (e.g. proposal_sent_status) must send components: [].
-    const fromComponents =
-      components
-        ?.find((c) => String(c.type ?? '').toLowerCase() === 'body')
-        ?.parameters?.find((p) => typeof p.text === 'string' && p.text.trim())
-        ?.text?.trim() ?? '';
-    const resolvedVariable1 = (variable1?.trim() || fromComponents).trim();
+    // Body params only when variable1 is a real value.
+    // Empty / undefined / "{{1}}" → components: [] (e.g. proposal_sent_status).
+    // Ignores incoming components to avoid #132000 on no-variable templates.
+    const rawVariable1 = variable1?.trim() ?? '';
+    const resolvedVariable1 =
+      rawVariable1 && !/^\{\{\d+\}\}$/.test(rawVariable1) ? rawVariable1 : '';
 
-    const templateComponents =
-      resolvedVariable1.length > 0
-        ? [
-            {
-              type: 'body',
-              parameters: [{ type: 'text', text: resolvedVariable1 }],
-            },
-          ]
-        : [];
+    const templateComponents = resolvedVariable1
+      ? [
+          {
+            type: 'body',
+            parameters: [{ type: 'text', text: resolvedVariable1 }],
+          },
+        ]
+      : [];
 
     const payload = {
       messaging_product: 'whatsapp',

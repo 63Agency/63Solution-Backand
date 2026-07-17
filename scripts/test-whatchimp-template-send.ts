@@ -5,8 +5,6 @@ config({ path: resolve(process.cwd(), '.env') });
 
 const META_MESSAGES_URL =
   'https://graph.facebook.com/v18.0/1180177848511875/messages';
-const META_TEMPLATES_URL =
-  'https://graph.facebook.com/v18.0/1551611006381024/message_templates';
 
 async function main(): Promise<void> {
   const accessToken = process.env.META_ACCESS_TOKEN?.trim() ?? '';
@@ -15,52 +13,19 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // List templates from Meta
-  console.log('GET', META_TEMPLATES_URL);
-  const listRes = await fetch(META_TEMPLATES_URL, {
-    method: 'GET',
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      Accept: 'application/json',
-    },
-  });
-  const listText = await listRes.text();
-  console.log('\n=== Meta listTemplates response ===');
-  console.log('HTTP STATUS:', listRes.status);
-  console.log('RAW BODY:', listText);
-  try {
-    const parsed = JSON.parse(listText) as {
-      data?: { name?: string; language?: string; status?: string }[];
-    };
-    const names = (parsed.data ?? []).map(
-      (t) => `${t.name} (${t.language}, ${t.status})`,
-    );
-    console.log('TEMPLATES:', names.join('\n  '));
-    const proposal = (parsed.data ?? []).find(
-      (t) => t.name === 'proposal_sent_status',
-    );
-    console.log(
-      'proposal_sent_status language:',
-      proposal?.language ?? '(not found)',
-    );
-  } catch {
-    /* non-JSON */
-  }
-
-  // Send proposal_sent_status (no variables → components: [])
-  const languageCode = 'fr';
+  // Mimic sendTemplateMessage with no variable1 → components: []
   const payload = {
     messaging_product: 'whatsapp',
     to: '212690815605',
     type: 'template',
     template: {
       name: 'proposal_sent_status',
-      language: { code: languageCode },
+      language: { code: 'fr' },
       components: [],
     },
   };
 
-  console.log('\nPOST', META_MESSAGES_URL);
+  console.log('POST', META_MESSAGES_URL);
   console.log('BODY:', JSON.stringify(payload, null, 2));
 
   const res = await fetch(META_MESSAGES_URL, {
@@ -73,7 +38,7 @@ async function main(): Promise<void> {
   });
 
   const rawText = await res.text();
-  console.log('\n=== Meta sendTemplate response ===');
+  console.log('\n=== Meta API response ===');
   console.log('HTTP STATUS:', res.status);
   console.log('RAW BODY:', rawText);
   try {
