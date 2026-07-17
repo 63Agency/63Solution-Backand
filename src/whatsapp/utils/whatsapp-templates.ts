@@ -11,12 +11,27 @@ function readString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
+/** Extract BODY text from Meta `components` array. */
+function extractBodyFromMetaComponents(components: unknown): string {
+  if (!Array.isArray(components)) return '';
+  for (const c of components) {
+    if (!c || typeof c !== 'object') continue;
+    const comp = c as Record<string, unknown>;
+    const type = String(comp.type ?? '').toUpperCase();
+    if (type === 'BODY' && typeof comp.text === 'string') {
+      return comp.text.trim();
+    }
+  }
+  return '';
+}
+
 function extractTemplateBody(row: Record<string, unknown>): string {
   return (
-    readString(row.body_content) ??
-    readString(row.body) ??
-    readString(row.bodyContent) ??
-    readString(row.message) ??
+    extractBodyFromMetaComponents(row.components) ||
+    readString(row.body_content) ||
+    readString(row.body) ||
+    readString(row.bodyContent) ||
+    readString(row.message) ||
     ''
   );
 }
@@ -33,9 +48,9 @@ function extractTemplateName(row: Record<string, unknown>): string {
 function extractTemplateType(row: Record<string, unknown>): string | undefined {
   return (
     readString(row.template_type) ??
-    readString(row.type) ??
     readString(row.category) ??
-    readString(row.template_category)
+    readString(row.template_category) ??
+    readString(row.type)
   );
 }
 
@@ -63,13 +78,15 @@ function collectTemplateRows(raw: unknown): unknown[] {
   if (!raw || typeof raw !== 'object') return [];
 
   const obj = raw as Record<string, unknown>;
-  const message = obj.message;
-  if (Array.isArray(message)) return message;
-  if (message && typeof message === 'object') return [message];
 
+  // Meta Cloud API: { data: [...] }
   const data = obj.data;
   if (Array.isArray(data)) return data;
   if (data && typeof data === 'object') return [data];
+
+  const message = obj.message;
+  if (Array.isArray(message)) return message;
+  if (message && typeof message === 'object') return [message];
 
   const templates = obj.templates;
   if (Array.isArray(templates)) return templates;
@@ -92,8 +109,8 @@ export function normalizeWhatsAppTemplates(raw: unknown): WhatsAppTemplate[] {
       name,
       body: body || name,
       language:
-        readString(r.locale) ??
         readString(r.language) ??
+        readString(r.locale) ??
         readString(r.language_code),
       type: extractTemplateType(r),
       status: readString(r.status),

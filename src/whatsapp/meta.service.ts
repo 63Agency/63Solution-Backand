@@ -13,10 +13,10 @@ import {
 
 const WHATCHIMP_SEND_URL =
   'https://app.whatchimp.com/api/v1/whatsapp/send';
-const WHATCHIMP_TEMPLATE_LIST_URL =
-  'https://app.whatchimp.com/api/v1/whatsapp/template/list';
 const META_MESSAGES_URL =
   'https://graph.facebook.com/v18.0/1180177848511875/messages';
+const META_TEMPLATES_URL =
+  'https://graph.facebook.com/v18.0/1551611006381024/message_templates';
 
 type TemplateComponentInput = {
   type: string;
@@ -194,6 +194,7 @@ export class MetaService {
     const languageCode = language.trim() || 'fr';
 
     // {{1}} is replaced by the first body text parameter (variable1).
+    // Templates with no variables (e.g. proposal_sent_status) must send components: [].
     const fromComponents =
       components
         ?.find((c) => String(c.type ?? '').toLowerCase() === 'body')
@@ -201,7 +202,6 @@ export class MetaService {
         ?.text?.trim() ?? '';
     const resolvedVariable1 = (variable1?.trim() || fromComponents).trim();
 
-    // Always send Meta's exact body-components shape when we have a value.
     const templateComponents =
       resolvedVariable1.length > 0
         ? [
@@ -210,15 +210,7 @@ export class MetaService {
               parameters: [{ type: 'text', text: resolvedVariable1 }],
             },
           ]
-        : (components
-            ?.filter((c) => c.parameters?.length)
-            .map((c) => ({
-              type: String(c.type ?? 'body').toLowerCase(),
-              parameters: c.parameters.map((p) => ({
-                type: p.type || 'text',
-                text: p.text,
-              })),
-            })) ?? []);
+        : [];
 
     const payload = {
       messaging_product: 'whatsapp',
@@ -227,9 +219,7 @@ export class MetaService {
       template: {
         name: templateName,
         language: { code: languageCode },
-        ...(templateComponents.length > 0
-          ? { components: templateComponents }
-          : {}),
+        components: templateComponents,
       },
     };
 
@@ -289,126 +279,56 @@ export class MetaService {
   }
 
   async listTemplates(): Promise<WhatsAppTemplate[]> {
-    const apiKey = this.getApiToken();
-    const phoneNumberId = this.getPhoneNumberId();
+    const accessToken = this.requireMetaAccessToken();
+
+    this.logger.log(`[templates] GET ${META_TEMPLATES_URL}`);
+
+    const res = await fetch(META_TEMPLATES_URL, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: 'application/json',
+      },
+    });
+
+    const rawText = await res.text().catch(() => '');
+    let raw: unknown = {};
+    try {
+      raw = rawText ? JSON.parse(rawText) : {};
+    } catch {
+      raw = { parseError: rawText.slice(0, 500) };
+    }
 
     this.logger.log(
-      `[templates] start apiKey=${apiKey ? 'set' : 'MISSING'} phoneNumberId=${phoneNumberId || 'MISSING'}`,
+      `[templates] status=${res.status} bodyPreview=${rawText.slice(0, 500)}`,
     );
 
-    if (!apiKey) {
+    if (!res.ok) {
+      const errObj =
+        raw &&
+        typeof raw === 'object' &&
+        (raw as Record<string, unknown>).error &&
+        typeof (raw as Record<string, unknown>).error === 'object'
+          ? ((raw as Record<string, unknown>).error as Record<string, unknown>)
+          : null;
+      const apiMessage =
+        (typeof errObj?.message === 'string' ? errObj.message : null) ??
+        rawText.slice(0, 300);
+      this.logger.warn(`[templates] Meta ${res.status}: ${apiMessage}`);
       throw new ServiceUnavailableException({
-        message: 'WhatChimp non configuré (WHATCHIMP_API_KEY).',
-      });
-    }
-    if (!phoneNumberId) {
-      throw new ServiceUnavailableException({
-        message: 'WhatChimp non configuré (WHATCHIMP_PHONE_NUMBER_ID).',
+        message: `Meta templates: ${apiMessage}`,
       });
     }
 
-    const attempts: { method: string; url: string }[] = [
-      {
-        method: 'GET',
-        url: `${WHATCHIMP_TEMPLATE_LIST_URL}?apiToken=${encodeURIComponent(apiKey)}&phone_number_id=${encodeURIComponent(phoneNumberId)}`,
-      },
-    ];
+    const templates = normalizeWhatsAppTemplates(raw);
+    this.logger.log(
+      `[templates] normalized count=${templates.length} names=${templates.map((t) => t.name).join(', ') || '(none)'}`,
+    );
 
-    const errors: string[] = [];
-
-    for (const attempt of attempts) {
-      const safeUrl = attempt.url.replace(apiKey, '***');
-      this.logger.log(`[templates] ${attempt.method} ${safeUrl}`);
-
-      try {
-        const res = await fetch(attempt.url, {
-          method: attempt.method,
-          headers: { Accept: 'application/json' },
-        });
-
-        const rawText = await res.text().catch(() => '');
-        let raw: unknown = {};
-        try {
-          raw = rawText ? JSON.parse(rawText) : {};
-        } catch {
-          raw = { parseError: rawText.slice(0, 300) };
-        }
-
-        this.logger.log(
-          `[templates] ${attempt.method} status=${res.status} bodyPreview=${rawText.slice(0, 400)}`,
-        );
-
-        if (!res.ok) {
-          errors.push(`${attempt.method} ${res.status}`);
-          continue;
-        }
-
-        const templates = normalizeWhatsAppTemplates(raw);
-        this.logger.log(
-          `[templates] normalized count=${templates.length} names=${templates.map((t) => t.name).join(', ') || '(none)'}`,
-        );
-
-        if (templates.length > 0) {
-          return templates;
-        }
-
-        errors.push(`${attempt.method}: liste vide après normalisation`);
-      } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : String(err);
-        this.logger.warn(`[templates] ${attempt.method} failed: ${message}`);
-        errors.push(`${attempt.method}: ${message}`);
-      }
-    }
-
-    // POST fallback (WhatChimp docs)
-    const postUrl = WHATCHIMP_TEMPLATE_LIST_URL;
-    this.logger.log(`[templates] POST ${postUrl} (form fallback)`);
-    try {
-      const body = new URLSearchParams({
-        apiToken: apiKey,
-        phone_number_id: phoneNumberId,
-      });
-      const res = await fetch(postUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          Accept: 'application/json',
-        },
-        body: body.toString(),
-      });
-
-      const rawText = await res.text().catch(() => '');
-      let raw: unknown = {};
-      try {
-        raw = rawText ? JSON.parse(rawText) : {};
-      } catch {
-        raw = { parseError: rawText.slice(0, 300) };
-      }
-
-      this.logger.log(
-        `[templates] POST status=${res.status} bodyPreview=${rawText.slice(0, 400)}`,
-      );
-
-      if (res.ok) {
-        const templates = normalizeWhatsAppTemplates(raw);
-        this.logger.log(`[templates] POST normalized count=${templates.length}`);
-        if (templates.length > 0) return templates;
-        errors.push('POST: liste vide après normalisation');
-      } else {
-        errors.push(`POST ${res.status}`);
-      }
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      this.logger.warn(`[templates] POST failed: ${message}`);
-      errors.push(`POST: ${message}`);
-    }
-
-    this.logger.warn(`[templates] all attempts failed: ${errors.join('; ')}`);
-    throw new ServiceUnavailableException({
-      message: `Impossible de charger les templates WhatChimp (${errors.join('; ')})`,
-    });
+    return templates;
   }
 }
+
 
 export function mapMetaStatus(raw: string | undefined | null): string {
   const s = String(raw ?? 'sent').trim().toLowerCase();
