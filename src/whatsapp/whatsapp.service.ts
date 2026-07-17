@@ -53,8 +53,25 @@ function pickStr(obj: Record<string, unknown>, ...keys: string[]): string {
   return '';
 }
 
+function extractMetaMediaId(
+  msg: Record<string, unknown>,
+  mediaKey: string,
+): string {
+  const media = msg[mediaKey];
+  if (media && typeof media === 'object') {
+    return pickStr(media as Record<string, unknown>, 'id');
+  }
+  return '';
+}
+
 function extractMetaMessageBody(msg: Record<string, unknown>): string {
   const type = pickStr(msg, 'type');
+
+  // Audio: store Meta media_id only (not "[audio]").
+  if (type === 'audio') {
+    return extractMetaMediaId(msg, 'audio');
+  }
+
   if (type === 'text') {
     const text = msg.text;
     if (text && typeof text === 'object') {
@@ -87,6 +104,11 @@ function extractMetaMessageBody(msg: Record<string, unknown>): string {
   return type ? `[${type}]` : '';
 }
 
+function previewForConversation(type: string, body: string): string {
+  if (type === 'audio') return '[Audio]';
+  return body;
+}
+
 function mapConversation(row: ConversationRow): WhatsappConversation {
   return {
     id: String(row.id),
@@ -101,12 +123,15 @@ function mapConversation(row: ConversationRow): WhatsappConversation {
 }
 
 function mapMessage(row: MessageRow): WhatsappMessage {
+  const type = String(row.type ?? 'text');
+  const body = String(row.body ?? '');
   return {
     id: String(row.id),
     conversationId: String(row.conversation_id),
     direction: row.direction as MessageDirection,
-    body: String(row.body ?? ''),
-    type: String(row.type ?? 'text'),
+    body,
+    type,
+    mediaId: type === 'audio' && body ? body : null,
     status: String(row.status ?? 'sent'),
     watiMessageId: row.wati_message_id ? String(row.wati_message_id) : null,
     createdAt: String(row.sent_at ?? row.created_at),
@@ -170,6 +195,14 @@ export class WhatsappService {
     const templates = await this.meta.listTemplates();
     this.logger.log(`[templates] returning ${templates.length} template(s)`);
     return { templates };
+  }
+
+  async getMediaUrl(mediaId: string) {
+    return this.meta.getMediaUrl(mediaId);
+  }
+
+  async getMediaContent(mediaId: string) {
+    return this.meta.downloadMedia(mediaId);
   }
 
   async listConversations(): Promise<WhatsappConversation[]> {
@@ -528,14 +561,22 @@ export class WhatsappService {
       const from = pickStr(msg, 'from');
       const phone = normalizePhoneNumber(from);
       const type = pickStr(msg, 'type') || 'text';
+
+      if (type === 'audio') {
+        // Debug: full Meta inbound audio message object
+        // eslint-disable-next-line no-console -- debug Meta audio webhook shape
+        console.log('[WEBHOOK AUDIO]', JSON.stringify(msg, null, 2));
+      }
+
       const text = extractMetaMessageBody(msg);
       const metaMessageId = pickStr(msg, 'id');
       const sentAt =
         parseWebhookTimestamp(pickStr(msg, 'timestamp')) ??
         new Date().toISOString();
+      const preview = previewForConversation(type, text);
 
       this.logger.log(
-        `${prefix} parse message[${mi}] from=${from} phone=${phone} type=${type} metaId=${metaMessageId} text="${text.slice(0, 200)}${text.length > 200 ? '…' : ''}"`,
+        `${prefix} parse message[${mi}] from=${from} phone=${phone} type=${type} metaId=${metaMessageId} body="${text.slice(0, 200)}${text.length > 200 ? '…' : ''}"`,
       );
 
       if (!phone) {
@@ -551,7 +592,7 @@ export class WhatsappService {
         watiContactId: from || phone,
         watiConversationId: null,
         source: 'meta',
-        lastMessageText: text || null,
+        lastMessageText: preview || null,
         lastMessageAt: sentAt,
         incrementUnread: true,
       });
@@ -580,7 +621,7 @@ export class WhatsappService {
           conversationId: conv.id,
           phoneNumber: phone,
           contactName: conv.contact_name,
-          body: text,
+          body: preview,
           messageId: metaMessageId || null,
           createdAt: sentAt,
         });

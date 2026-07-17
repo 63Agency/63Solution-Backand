@@ -17,6 +17,8 @@ export type WhatsappMessage = {
   direction: MessageDirection;
   body: string;
   type: string;
+  /** Present when type is "audio" — Meta media id stored in body. */
+  mediaId: string | null;
   status: string;
   watiMessageId: string | null;
   createdAt: string;

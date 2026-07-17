@@ -3,6 +3,7 @@ import {
   Controller,
   DefaultValuePipe,
   Get,
+  Header,
   Param,
   ParseIntPipe,
   ParseUUIDPipe,
@@ -10,9 +11,12 @@ import {
   Post,
   Query,
   Req,
+  Res,
+  StreamableFile,
   UseGuards,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
+import type { Response } from 'express';
 import type { AppUser } from '../auth/types/app-user';
 import { SendWhatsappMessageDto } from './dto/send-whatsapp-message.dto';
 import { BroadcastWhatsappMessageDto } from './dto/broadcast-whatsapp-message.dto';
@@ -26,6 +30,33 @@ export class WhatsappController {
   @Get('templates')
   listTemplates() {
     return this.whatsapp.listTemplates();
+  }
+
+  /**
+   * Resolve Meta media id → temporary download URL for the frontend.
+   * GET Graph /v18.0/:mediaId → { url, mimeType, mediaId }
+   */
+  @Get('media/:mediaId')
+  getMedia(@Param('mediaId') mediaId: string) {
+    return this.whatsapp.getMediaUrl(mediaId);
+  }
+
+  /**
+   * Proxy-download media bytes (browser <audio> cannot send Meta Bearer token).
+   * Frontend: fetch with JWT → blob → URL.createObjectURL → <audio src>.
+   */
+  @Get('media/:mediaId/content')
+  @Header('Cache-Control', 'private, max-age=300')
+  async getMediaContent(
+    @Param('mediaId') mediaId: string,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const file = await this.whatsapp.getMediaContent(mediaId);
+    res.set({
+      'Content-Type': file.mimeType,
+      'Content-Length': String(file.buffer.length),
+    });
+    return new StreamableFile(file.buffer);
   }
 
   @Get('conversations')

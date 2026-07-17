@@ -324,6 +324,112 @@ export class MetaService {
 
     return templates;
   }
+
+  /**
+   * Resolve a Meta media id to a temporary download URL.
+   * GET https://graph.facebook.com/v18.0/<mediaId>
+   */
+  async getMediaUrl(mediaId: string): Promise<{
+    url: string;
+    mimeType: string | null;
+    mediaId: string;
+    fileSize: number | null;
+  }> {
+    const accessToken = this.requireMetaAccessToken();
+    const id = mediaId.trim();
+    if (!id) {
+      throw new ServiceUnavailableException({
+        message: 'mediaId requis.',
+      });
+    }
+
+    const metaUrl = `https://graph.facebook.com/v18.0/${encodeURIComponent(id)}`;
+    this.logger.log(`Meta getMedia GET ${metaUrl}`);
+
+    const res = await fetch(metaUrl, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: 'application/json',
+      },
+    });
+
+    const rawText = await res.text().catch(() => '');
+    let raw: Record<string, unknown> = {};
+    try {
+      raw = rawText ? (JSON.parse(rawText) as Record<string, unknown>) : {};
+    } catch {
+      raw = { parseError: rawText.slice(0, 500) };
+    }
+
+    this.logger.log(
+      `Meta getMedia status=${res.status} body=${rawText.slice(0, 400)}`,
+    );
+
+    if (!res.ok) {
+      const errObj =
+        raw.error && typeof raw.error === 'object'
+          ? (raw.error as Record<string, unknown>)
+          : null;
+      const apiMessage =
+        (typeof errObj?.message === 'string' ? errObj.message : null) ??
+        rawText.slice(0, 300);
+      throw new ServiceUnavailableException({
+        message: `Meta media: ${apiMessage}`,
+      });
+    }
+
+    const url = typeof raw.url === 'string' ? raw.url.trim() : '';
+    if (!url) {
+      throw new ServiceUnavailableException({
+        message: 'Meta media: URL manquante.',
+      });
+    }
+
+    return {
+      url,
+      mimeType: typeof raw.mime_type === 'string' ? raw.mime_type : null,
+      mediaId: typeof raw.id === 'string' ? raw.id : id,
+      fileSize: typeof raw.file_size === 'number' ? raw.file_size : null,
+    };
+  }
+
+  /**
+   * Download media bytes from Meta (URL requires Bearer token — not playable
+   * directly in a browser <audio src>).
+   */
+  async downloadMedia(mediaId: string): Promise<{
+    buffer: Buffer;
+    mimeType: string;
+    mediaId: string;
+  }> {
+    const info = await this.getMediaUrl(mediaId);
+    const accessToken = this.requireMetaAccessToken();
+
+    const res = await fetch(info.url, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    });
+
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '');
+      this.logger.warn(
+        `Meta downloadMedia ${res.status}: ${detail.slice(0, 300)}`,
+      );
+      throw new ServiceUnavailableException({
+        message: `Meta media download failed (${res.status}).`,
+      });
+    }
+
+    const arrayBuffer = await res.arrayBuffer();
+    return {
+      buffer: Buffer.from(arrayBuffer),
+      mimeType: info.mimeType || 'audio/ogg',
+      mediaId: info.mediaId,
+    };
+  }
 }
 
 
