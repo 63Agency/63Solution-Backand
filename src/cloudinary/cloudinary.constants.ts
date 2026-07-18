@@ -1,5 +1,6 @@
 export const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
 export const VIDEO_MAX_BYTES = 100 * 1024 * 1024;
+export const RAW_MAX_BYTES = 40 * 1024 * 1024;
 export const MULTIPLE_MAX_FILES = 10;
 
 export const ALLOWED_IMAGE_EXTENSIONS = [

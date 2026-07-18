@@ -65,6 +65,19 @@ export class CloudinaryController {
     return this.cloudinary.uploadAndSaveVideo(file, req.user, query.folder);
   }
 
+  @Post('raw')
+  @UseInterceptors(FileInterceptor('file', multerOptionsFor('raw')))
+  uploadRaw(
+    @UploadedFile() file: Express.Multer.File | undefined,
+    @Req() req: { user: AppUser },
+    @Query() query: UploadFolderQueryDto,
+  ) {
+    if (!file) {
+      throw new BadRequestException({ message: 'Champ "file" requis' });
+    }
+    return this.cloudinary.uploadAndSaveRaw(file, req.user, query.folder);
+  }
+
   @Post('multiple')
   @UseInterceptors(
     FilesInterceptor('files', MULTIPLE_MAX_FILES, multerOptionsForMultiple()),

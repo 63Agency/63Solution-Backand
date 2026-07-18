@@ -121,7 +121,14 @@ export class MetaService {
   async sendTextMessage(
     toPhone: string,
     messageText: string,
+    options?: { replyToMessageId?: string },
   ): Promise<MetaSendMessageResult> {
+    const replyTo = options?.replyToMessageId?.trim();
+    // Les réponses (citation WhatsApp) passent par l'API Meta Cloud — WhatChimp ne gère pas context.message_id.
+    if (replyTo) {
+      return this.sendTextMessageViaMeta(toPhone, messageText, replyTo);
+    }
+
     const { apiKey, phoneNumberId } = this.requireWhatChimpConfig();
 
     const phone = normalizePhoneNumber(toPhone);
@@ -170,6 +177,181 @@ export class MetaService {
     return {
       whatsappMessageId: pickMessageId(raw),
       text: messageText,
+      status: 'sent',
+      sentAt: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * Envoi texte via Meta Graph API, avec citation optionnelle (reply).
+   * https://developers.facebook.com/docs/whatsapp/cloud-api/guides/send-messages#replies
+   */
+  async sendTextMessageViaMeta(
+    toPhone: string,
+    messageText: string,
+    replyToMessageId?: string,
+  ): Promise<MetaSendMessageResult> {
+    const accessToken = this.requireMetaAccessToken();
+
+    const phone = normalizePhoneNumber(toPhone);
+    if (!phone) {
+      throw new ServiceUnavailableException({
+        message: 'Numéro WhatsApp invalide.',
+      });
+    }
+
+    const payload: Record<string, unknown> = {
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: phone,
+      type: 'text',
+      text: {
+        preview_url: true,
+        body: messageText,
+      },
+    };
+
+    const contextId = replyToMessageId?.trim();
+    if (contextId) {
+      payload.context = { message_id: contextId };
+    }
+
+    this.logger.log(
+      `Meta sendText replyTo=${contextId ?? '(none)'} to=${phone}`,
+    );
+
+    const res = await fetch(META_MESSAGES_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const rawText = await res.text().catch(() => '');
+    let raw: Record<string, unknown> = {};
+    try {
+      raw = rawText ? (JSON.parse(rawText) as Record<string, unknown>) : {};
+    } catch {
+      raw = { parseError: rawText.slice(0, 500) };
+    }
+
+    this.logger.log(
+      `Meta sendText response status=${res.status} body=${rawText.slice(0, 500)}`,
+    );
+
+    if (!res.ok) {
+      const errObj =
+        raw.error && typeof raw.error === 'object'
+          ? (raw.error as Record<string, unknown>)
+          : null;
+      const apiMessage =
+        (typeof errObj?.message === 'string' ? errObj.message : null) ??
+        (typeof raw.message === 'string' ? raw.message : null) ??
+        JSON.stringify(raw).slice(0, 300);
+      this.logger.warn(`Meta sendText ${res.status}: ${apiMessage}`);
+      throw new ServiceUnavailableException({
+        message: `Meta: ${apiMessage}`,
+      });
+    }
+
+    return {
+      whatsappMessageId: pickMessageId(raw),
+      text: messageText,
+      status: 'sent',
+      sentAt: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * Envoi média (image / video / document) via lien HTTPS public (Cloudinary).
+   * https://developers.facebook.com/docs/whatsapp/cloud-api/guides/send-messages
+   */
+  async sendMediaMessageViaMeta(
+    toPhone: string,
+    input: {
+      type: 'image' | 'video' | 'document';
+      mediaUrl: string;
+      caption?: string;
+      fileName?: string;
+      replyToMessageId?: string;
+    },
+  ): Promise<MetaSendMessageResult> {
+    const accessToken = this.requireMetaAccessToken();
+
+    const phone = normalizePhoneNumber(toPhone);
+    if (!phone) {
+      throw new ServiceUnavailableException({
+        message: 'Numéro WhatsApp invalide.',
+      });
+    }
+
+    const caption = input.caption?.trim() || undefined;
+    const mediaPayload: Record<string, unknown> = {
+      link: input.mediaUrl.trim(),
+    };
+    if (caption) mediaPayload.caption = caption;
+    if (input.type === 'document' && input.fileName?.trim()) {
+      mediaPayload.filename = input.fileName.trim();
+    }
+
+    const payload: Record<string, unknown> = {
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: phone,
+      type: input.type,
+      [input.type]: mediaPayload,
+    };
+
+    const contextId = input.replyToMessageId?.trim();
+    if (contextId) {
+      payload.context = { message_id: contextId };
+    }
+
+    this.logger.log(
+      `Meta sendMedia type=${input.type} replyTo=${contextId ?? '(none)'} to=${phone}`,
+    );
+
+    const res = await fetch(META_MESSAGES_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const rawText = await res.text().catch(() => '');
+    let raw: Record<string, unknown> = {};
+    try {
+      raw = rawText ? (JSON.parse(rawText) as Record<string, unknown>) : {};
+    } catch {
+      raw = { parseError: rawText.slice(0, 500) };
+    }
+
+    this.logger.log(
+      `Meta sendMedia response status=${res.status} body=${rawText.slice(0, 500)}`,
+    );
+
+    if (!res.ok) {
+      const errObj =
+        raw.error && typeof raw.error === 'object'
+          ? (raw.error as Record<string, unknown>)
+          : null;
+      const apiMessage =
+        (typeof errObj?.message === 'string' ? errObj.message : null) ??
+        (typeof raw.message === 'string' ? raw.message : null) ??
+        JSON.stringify(raw).slice(0, 300);
+      this.logger.warn(`Meta sendMedia ${res.status}: ${apiMessage}`);
+      throw new ServiceUnavailableException({
+        message: `Meta: ${apiMessage}`,
+      });
+    }
+
+    return {
+      whatsappMessageId: pickMessageId(raw),
+      text: caption || input.fileName || `[${input.type}]`,
       status: 'sent',
       sentAt: new Date().toISOString(),
     };
@@ -343,7 +525,7 @@ export class MetaService {
       });
     }
 
-    const metaUrl = `https://graph.facebook.com/v18.0/${encodeURIComponent(id)}`;
+    const metaUrl = `https://graph.facebook.com/v19.0/${encodeURIComponent(id)}`;
     this.logger.log(`Meta getMedia GET ${metaUrl}`);
 
     const res = await fetch(metaUrl, {
@@ -402,6 +584,7 @@ export class MetaService {
     buffer: Buffer;
     mimeType: string;
     mediaId: string;
+    fileSize: number | null;
   }> {
     const info = await this.getMediaUrl(mediaId);
     const accessToken = this.requireMetaAccessToken();
@@ -424,10 +607,12 @@ export class MetaService {
     }
 
     const arrayBuffer = await res.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
     return {
-      buffer: Buffer.from(arrayBuffer),
-      mimeType: info.mimeType || 'audio/ogg',
+      buffer,
+      mimeType: info.mimeType || 'application/octet-stream',
       mediaId: info.mediaId,
+      fileSize: info.fileSize ?? buffer.length,
     };
   }
 }

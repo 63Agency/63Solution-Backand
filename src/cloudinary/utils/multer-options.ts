@@ -7,6 +7,7 @@ import {
   ALLOWED_VIDEO_EXTENSIONS,
   ALLOWED_VIDEO_MIMES,
   IMAGE_MAX_BYTES,
+  RAW_MAX_BYTES,
   VIDEO_MAX_BYTES,
 } from '../cloudinary.constants';
 
@@ -45,7 +46,24 @@ function assertFileKind(
   }
 }
 
-export function multerOptionsFor(kind: 'image' | 'video'): MulterOptions {
+export function multerOptionsFor(kind: 'image' | 'video' | 'raw'): MulterOptions {
+  if (kind === 'raw') {
+    return {
+      storage: memoryStorage(),
+      limits: { fileSize: RAW_MAX_BYTES, files: 1 },
+      fileFilter: (_req, file, cb) => {
+        if (!file.originalname?.trim()) {
+          cb(
+            new BadRequestException({ message: 'Nom de fichier requis' }),
+            false,
+          );
+          return;
+        }
+        cb(null, true);
+      },
+    };
+  }
+
   const maxSize = kind === 'image' ? IMAGE_MAX_BYTES : VIDEO_MAX_BYTES;
   return {
     storage: memoryStorage(),

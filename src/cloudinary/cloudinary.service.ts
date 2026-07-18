@@ -83,6 +83,59 @@ export class CloudinaryService implements OnModuleInit {
     });
   }
 
+  /**
+   * Upload inbound WhatsApp media (from Meta download) to Cloudinary.
+   * Does not require a logged-in user / media_files row.
+   */
+  async uploadWhatsAppInboundBuffer(
+    buffer: Buffer,
+    options: {
+      resourceType: 'image' | 'video' | 'raw';
+      folder?: string;
+      fileName?: string;
+      mimeType?: string;
+    },
+  ): Promise<{
+    secureUrl: string;
+    publicId: string;
+    bytes: number | null;
+    resourceType: 'image' | 'video' | 'raw';
+  }> {
+    if (!buffer?.length) {
+      throw new BadRequestException({ message: 'Buffer média vide' });
+    }
+    const folder = this.normalizeFolder(
+      options.folder ?? `${DEFAULT_UPLOAD_FOLDER}/whatsapp/inbound`,
+    );
+    const baseName = (options.fileName ?? 'media')
+      .replace(/\.[^/.]+$/, '')
+      .replace(/[^\w.-]+/g, '_')
+      .slice(0, 80) || 'media';
+
+    const result = await this.uploadBuffer(buffer, {
+      folder,
+      resource_type: options.resourceType,
+      use_filename: true,
+      unique_filename: true,
+      filename_override: baseName,
+    });
+
+    const resourceType =
+      result.resource_type === 'video'
+        ? 'video'
+        : result.resource_type === 'raw'
+          ? 'raw'
+          : 'image';
+
+    // Prefer Cloudinary secure_url for inbound WA media (esp. audio/ogg voice notes).
+    return {
+      secureUrl: result.secure_url,
+      publicId: result.public_id,
+      bytes: typeof result.bytes === 'number' ? result.bytes : buffer.length,
+      resourceType,
+    };
+  }
+
   async uploadImage(
     file: Express.Multer.File,
     folder: string,
@@ -107,6 +160,24 @@ export class CloudinaryService implements OnModuleInit {
     return this.uploadBuffer(file.buffer, {
       folder: this.normalizeFolder(folder),
       resource_type: 'video',
+    });
+  }
+
+  async uploadRaw(
+    file: Express.Multer.File,
+    folder: string,
+  ): Promise<UploadApiResponse> {
+    if (!file?.buffer?.length) {
+      throw new BadRequestException({ message: 'Fichier requis' });
+    }
+    const original = file.originalname?.trim() || 'document';
+    return this.uploadBuffer(file.buffer, {
+      folder: this.normalizeFolder(folder),
+      resource_type: 'raw',
+      public_id: undefined,
+      use_filename: true,
+      unique_filename: true,
+      filename_override: original.replace(/\.[^/.]+$/, '') || 'document',
     });
   }
 
@@ -193,12 +264,15 @@ export class CloudinaryService implements OnModuleInit {
     folder: string,
   ): UploadResponseDto {
     const resourceType =
-      result.resource_type === 'video' ? 'video' : 'image';
-    const optimizedUrl = this.getOptimizedUrl(
-      result.public_id,
-      {},
-      resourceType,
-    );
+      result.resource_type === 'video'
+        ? 'video'
+        : result.resource_type === 'raw'
+          ? 'raw'
+          : 'image';
+    const optimizedUrl =
+      resourceType === 'raw'
+        ? result.secure_url
+        : this.getOptimizedUrl(result.public_id, {}, resourceType);
     const thumbnailUrl =
       resourceType === 'video'
         ? this.generateThumbnail(result.public_id)
@@ -253,6 +327,38 @@ export class CloudinaryService implements OnModuleInit {
     return this.persistUpload(result, user, f);
   }
 
+  async uploadAndSaveRaw(
+    file: Express.Multer.File,
+    user: AppUser,
+    folder?: string,
+  ): Promise<UploadResponseDto> {
+    const f = this.normalizeFolder(folder);
+    const result = await this.uploadRaw(file, f);
+    try {
+      return await this.persistUpload(result, user, f);
+    } catch (err) {
+      this.logger.warn(
+        `media_files persist raw failed — returning Cloudinary URL only: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      const media: MediaFileDto = {
+        id: result.public_id,
+        publicId: result.public_id,
+        secureUrl: result.secure_url,
+        resourceType: 'raw',
+        format: result.format ? String(result.format) : null,
+        width: null,
+        height: null,
+        duration: null,
+        folder: f,
+        userId: user.id,
+        createdAt: new Date().toISOString(),
+      };
+      return this.toUploadResponse(result, media, f);
+    }
+  }
+
   async uploadAndSaveMultiple(
     files: Express.Multer.File[],
     user: AppUser,
@@ -294,7 +400,8 @@ export class CloudinaryService implements OnModuleInit {
   ): Promise<TransformUrlResponseDto> {
     const decoded = decodeURIComponent(publicId).trim();
     const stored = await this.mediaFiles.findByPublicId(decoded);
-    const resourceType = stored?.resourceType ?? 'image';
+    const resourceType =
+      stored?.resourceType === 'video' ? 'video' : 'image';
     return this.buildTransformResponse(decoded, resourceType, options);
   }
 }

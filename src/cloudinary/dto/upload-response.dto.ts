@@ -3,7 +3,7 @@ import type { MediaFileDto } from './media-file.dto';
 export class UploadResponseDto {
   publicId!: string;
   secureUrl!: string;
-  resourceType!: 'image' | 'video';
+  resourceType!: 'image' | 'video' | 'raw';
   format!: string;
   width!: number | null;
   height!: number | null;

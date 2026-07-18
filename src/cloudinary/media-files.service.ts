@@ -27,7 +27,12 @@ function mapMediaFile(row: MediaFileRow): MediaFileDto {
     id: String(row.id),
     publicId: String(row.public_id),
     secureUrl: String(row.secure_url),
-    resourceType: row.resource_type as 'image' | 'video',
+    resourceType:
+      row.resource_type === 'video'
+        ? 'video'
+        : row.resource_type === 'raw'
+          ? 'raw'
+          : 'image',
     format: row.format ? String(row.format) : null,
     width: row.width != null ? Number(row.width) : null,
     height: row.height != null ? Number(row.height) : null,
@@ -48,7 +53,11 @@ export class MediaFilesService {
     folder: string,
   ): Promise<MediaFileDto> {
     const resourceType =
-      result.resource_type === 'video' ? 'video' : 'image';
+      result.resource_type === 'video'
+        ? 'video'
+        : result.resource_type === 'raw'
+          ? 'raw'
+          : 'image';
     const row = {
       public_id: result.public_id,
       secure_url: result.secure_url,

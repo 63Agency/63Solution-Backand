@@ -19,9 +19,21 @@ export type WhatsappMessage = {
   type: string;
   /** Present when type is "audio" — Meta media id stored in body. */
   mediaId: string | null;
+  /** Cloudinary / public HTTPS URL for image, video, document. */
+  mediaUrl: string | null;
+  fileName: string | null;
+  fileSize: number | null;
   status: string;
   watiMessageId: string | null;
+  /** Alias Meta (même valeur que watiMessageId). */
+  metaMessageId: string | null;
   createdAt: string;
+  /** Citation WhatsApp (réponse à un message). */
+  replyTo: {
+    id: string;
+    body: string;
+    authorLabel: string;
+  } | null;
 };
 
 export type MetaSendMessageResult = {

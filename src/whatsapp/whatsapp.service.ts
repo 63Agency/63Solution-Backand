@@ -1,9 +1,11 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { CloudinaryService } from '../cloudinary/cloudinary.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { SupabaseService } from '../supabase/supabase.service';
 import { SendWhatsappMessageDto } from './dto/send-whatsapp-message.dto';
@@ -19,6 +21,9 @@ import {
   formatSupabaseError,
   stringifyForLog,
 } from './utils/whatsapp-debug-log';
+
+const INBOUND_MEDIA_TYPES = new Set(['image', 'video', 'document', 'audio']);
+const MEDIA_UNAVAILABLE = 'Media unavailable';
 
 type ConversationRow = {
   id: string;
@@ -43,6 +48,12 @@ type MessageRow = {
   wati_message_id: string | null;
   sent_at: string | null;
   created_at: string;
+  reply_to_wati_message_id?: string | null;
+  reply_to_preview?: string | null;
+  reply_to_author?: string | null;
+  media_url?: string | null;
+  file_name?: string | null;
+  file_size?: number | null;
 };
 
 function pickStr(obj: Record<string, unknown>, ...keys: string[]): string {
@@ -53,23 +64,72 @@ function pickStr(obj: Record<string, unknown>, ...keys: string[]): string {
   return '';
 }
 
-function extractMetaMediaId(
+function extractMetaMediaBlock(
   msg: Record<string, unknown>,
-  mediaKey: string,
-): string {
-  const media = msg[mediaKey];
-  if (media && typeof media === 'object') {
-    return pickStr(media as Record<string, unknown>, 'id');
-  }
-  return '';
+  type: string,
+): {
+  mediaId: string;
+  mimeType: string;
+  caption: string;
+  fileName: string;
+} | null {
+  if (!INBOUND_MEDIA_TYPES.has(type)) return null;
+  const media = msg[type];
+  if (!media || typeof media !== 'object') return null;
+  const m = media as Record<string, unknown>;
+  return {
+    mediaId: pickStr(m, 'id'),
+    mimeType: pickStr(m, 'mime_type', 'mimeType'),
+    caption: pickStr(m, 'caption'),
+    fileName: pickStr(m, 'filename', 'file_name', 'name'),
+  };
+}
+
+function extensionFromMime(mimeType: string, type: string): string {
+  const mime = mimeType.toLowerCase().split(';')[0].trim();
+  const map: Record<string, string> = {
+    'image/jpeg': 'jpg',
+    'image/jpg': 'jpg',
+    'image/png': 'png',
+    'image/webp': 'webp',
+    'image/gif': 'gif',
+    'video/mp4': 'mp4',
+    'video/3gpp': '3gp',
+    'audio/ogg': 'ogg',
+    'audio/mpeg': 'mp3',
+    'audio/mp4': 'm4a',
+    'audio/aac': 'aac',
+    'audio/amr': 'amr',
+    'application/pdf': 'pdf',
+    'application/msword': 'doc',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
+      'docx',
+    'application/vnd.ms-excel': 'xls',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+  };
+  if (map[mime]) return map[mime];
+  if (type === 'image') return 'jpg';
+  if (type === 'video') return 'mp4';
+  if (type === 'audio') return 'ogg';
+  return 'bin';
+}
+
+function cloudinaryResourceTypeFor(
+  type: string,
+): 'image' | 'video' | 'raw' {
+  if (type === 'image') return 'image';
+  if (type === 'video' || type === 'audio') return 'video';
+  return 'raw';
 }
 
 function extractMetaMessageBody(msg: Record<string, unknown>): string {
   const type = pickStr(msg, 'type');
 
-  // Audio: store Meta media_id only (not "[audio]").
-  if (type === 'audio') {
-    return extractMetaMediaId(msg, 'audio');
+  if (INBOUND_MEDIA_TYPES.has(type)) {
+    const block = extractMetaMediaBlock(msg, type);
+    if (block?.caption) return block.caption;
+    if (type === 'document' && block?.fileName) return block.fileName;
+    return '';
   }
 
   if (type === 'text') {
@@ -104,8 +164,50 @@ function extractMetaMessageBody(msg: Record<string, unknown>): string {
   return type ? `[${type}]` : '';
 }
 
+function extractReplyContext(msg: Record<string, unknown>): {
+  wamid: string;
+  from: string;
+} {
+  const candidates: unknown[] = [
+    msg.context,
+    msg.reply_to,
+    msg.quoted_message,
+    msg.referred_message,
+  ];
+
+  // Some providers nest under interactive / raw
+  const interactive = msg.interactive;
+  if (interactive && typeof interactive === 'object') {
+    candidates.push((interactive as Record<string, unknown>).context);
+  }
+
+  for (const raw of candidates) {
+    if (!raw || typeof raw !== 'object') continue;
+    const ctx = raw as Record<string, unknown>;
+    const wamid = pickStr(ctx, 'id', 'message_id', 'messageId', 'wamid');
+    if (wamid) {
+      return { wamid, from: pickStr(ctx, 'from', 'wa_id') };
+    }
+  }
+
+  // Rare top-level aliases
+  const top = pickStr(
+    msg,
+    'context_id',
+    'contextId',
+    'quoted_message_id',
+    'reply_to_message_id',
+  );
+  if (top) return { wamid: top, from: '' };
+
+  return { wamid: '', from: '' };
+}
+
 function previewForConversation(type: string, body: string): string {
-  if (type === 'audio') return '[Audio]';
+  if (type === 'audio') return 'Audio';
+  if (type === 'image') return 'Photo';
+  if (type === 'video') return 'Vidéo';
+  if (type === 'document') return body.trim() || 'Document';
   return body;
 }
 
@@ -125,18 +227,62 @@ function mapConversation(row: ConversationRow): WhatsappConversation {
 function mapMessage(row: MessageRow): WhatsappMessage {
   const type = String(row.type ?? 'text');
   const body = String(row.body ?? '');
+  const watiMessageId = row.wati_message_id ? String(row.wati_message_id) : null;
+  const replyWamid = row.reply_to_wati_message_id
+    ? String(row.reply_to_wati_message_id).trim()
+    : '';
+  const replyPreview = row.reply_to_preview
+    ? String(row.reply_to_preview).trim()
+    : '';
+  const replyAuthor = row.reply_to_author
+    ? String(row.reply_to_author).trim()
+    : '';
+  const mediaUrl =
+    typeof row.media_url === 'string' && row.media_url.trim()
+      ? row.media_url.trim()
+      : null;
+  const fileName =
+    typeof row.file_name === 'string' && row.file_name.trim()
+      ? row.file_name.trim()
+      : null;
+  const fileSize =
+    typeof row.file_size === 'number' && Number.isFinite(row.file_size)
+      ? row.file_size
+      : null;
+
+  // Legacy audio: Meta media id was stored in body (numeric). Prefer mediaUrl when set.
+  const legacyAudioId =
+    type === 'audio' && !mediaUrl && /^\d+$/.test(body.trim())
+      ? body.trim()
+      : null;
+
   return {
     id: String(row.id),
     conversationId: String(row.conversation_id),
     direction: row.direction as MessageDirection,
     body,
     type,
-    mediaId: type === 'audio' && body ? body : null,
+    mediaId: legacyAudioId,
+    mediaUrl,
+    fileName,
+    fileSize,
     status: String(row.status ?? 'sent'),
-    watiMessageId: row.wati_message_id ? String(row.wati_message_id) : null,
+    watiMessageId,
+    metaMessageId: watiMessageId,
     createdAt: String(row.sent_at ?? row.created_at),
+    replyTo:
+      replyWamid || replyPreview
+        ? {
+            id: replyWamid || String(row.id),
+            body: replyPreview || 'Message',
+            authorLabel: replyAuthor || 'Contact',
+          }
+        : null,
   };
 }
+
+const MESSAGE_SELECT =
+  'id, conversation_id, direction, body, type, status, wati_message_id, sent_at, created_at, reply_to_wati_message_id, reply_to_preview, reply_to_author, media_url, file_name, file_size';
 
 function parseWebhookTimestamp(raw: string): string | null {
   if (!raw) return null;
@@ -180,6 +326,7 @@ export class WhatsappService {
     private readonly supabase: SupabaseService,
     private readonly meta: MetaService,
     private readonly notifications: NotificationsService,
+    private readonly cloudinary: CloudinaryService,
   ) {}
 
   verifyMetaWebhook(
@@ -238,7 +385,7 @@ export class WhatsappService {
       .getClient()
       .from('whatsapp_messages')
       .select(
-        'id, conversation_id, direction, body, type, status, wati_message_id, sent_at, created_at',
+        MESSAGE_SELECT,
       )
       .eq('conversation_id', conversationId)
       .order('created_at', { ascending: true })
@@ -272,9 +419,78 @@ export class WhatsappService {
     dto: SendWhatsappMessageDto,
   ): Promise<WhatsappMessage> {
     const conv = await this.conversationByIdOr404(conversationId);
+    const quote = await this.resolveReplyQuote(
+      conversationId,
+      dto.replyToMessageId,
+      conv.contact_name,
+    );
+
+    const mediaUrl = dto.mediaUrl?.trim();
+    const mediaType = dto.type;
+    const caption = (dto.text ?? '').trim();
+
+    if (mediaUrl && mediaType) {
+      const sent = await this.meta.sendMediaMessageViaMeta(conv.phone_number, {
+        type: mediaType,
+        mediaUrl,
+        caption: caption || undefined,
+        fileName: dto.fileName?.trim(),
+        replyToMessageId: quote?.watiMessageId,
+      });
+
+      const now = new Date().toISOString();
+      const bodyForStore =
+        caption ||
+        dto.fileName?.trim() ||
+        (mediaType === 'image'
+          ? 'Photo'
+          : mediaType === 'video'
+            ? 'Vidéo'
+            : 'Document');
+
+      const message = await this.persistMessage({
+        conversationId: conv.id,
+        direction: 'outbound',
+        body: bodyForStore,
+        type: mediaType,
+        status: sent.status,
+        watiMessageId: sent.whatsappMessageId,
+        watiLocalId: null,
+        sentAt: sent.sentAt ?? now,
+        incrementUnread: false,
+        replyToWatiMessageId: quote?.watiMessageId ?? null,
+        replyToPreview: quote?.preview ?? null,
+        replyToAuthor: quote?.authorLabel ?? null,
+        mediaUrl,
+        fileName: dto.fileName?.trim() || null,
+        fileSize:
+          typeof dto.fileSize === 'number' && Number.isFinite(dto.fileSize)
+            ? dto.fileSize
+            : null,
+      });
+
+      await this.touchConversation(conv.id, {
+        lastMessageText: previewForConversation(mediaType, bodyForStore),
+        lastMessageAt: sent.sentAt ?? now,
+        contactName: conv.contact_name,
+        watiContactId: conv.wati_contact_id,
+        watiConversationId: conv.wati_conversation_id,
+      });
+
+      return message;
+    }
+
+    const text = caption;
+    if (!text) {
+      throw new BadRequestException({ message: 'text requis' });
+    }
+
     const sent = await this.meta.sendTextMessage(
       conv.phone_number,
-      dto.text.trim(),
+      text,
+      quote?.watiMessageId
+        ? { replyToMessageId: quote.watiMessageId }
+        : undefined,
     );
 
     const now = new Date().toISOString();
@@ -288,6 +504,9 @@ export class WhatsappService {
       watiLocalId: null,
       sentAt: sent.sentAt ?? now,
       incrementUnread: false,
+      replyToWatiMessageId: quote?.watiMessageId ?? null,
+      replyToPreview: quote?.preview ?? null,
+      replyToAuthor: quote?.authorLabel ?? null,
     });
 
     await this.touchConversation(conv.id, {
@@ -299,6 +518,107 @@ export class WhatsappService {
     });
 
     return message;
+  }
+
+  /**
+   * Accepte un wamid Meta (wamid.…) ou l'uuid interne du message, et retourne
+   * les métadonnées de citation à stocker + envoyer à Meta.
+   */
+  private async resolveReplyQuote(
+    conversationId: string,
+    replyToMessageId: string | undefined,
+    contactName: string | null,
+  ): Promise<{
+    watiMessageId: string;
+    preview: string;
+    authorLabel: string;
+  } | null> {
+    const raw = replyToMessageId?.trim();
+    if (!raw) return null;
+
+    const uuidRe =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+    let row: MessageRow | null = null;
+
+    if (uuidRe.test(raw)) {
+      const { data, error } = await this.supabase
+        .getClient()
+        .from('whatsapp_messages')
+        .select(MESSAGE_SELECT)
+        .eq('id', raw)
+        .maybeSingle();
+      if (error) {
+        this.logger.warn(
+          `resolveReplyQuote uuid lookup failed: ${formatSupabaseError(error)}`,
+        );
+        throw new BadRequestException({
+          message: 'Impossible de résoudre le message cité.',
+        });
+      }
+      row = (data as MessageRow | null) ?? null;
+    } else {
+      const { data, error } = await this.supabase
+        .getClient()
+        .from('whatsapp_messages')
+        .select(MESSAGE_SELECT)
+        .eq('wati_message_id', raw)
+        .maybeSingle();
+      if (error) {
+        this.logger.warn(
+          `resolveReplyQuote wamid lookup failed: ${formatSupabaseError(error)}`,
+        );
+        throw new BadRequestException({
+          message: 'Impossible de résoudre le message cité.',
+        });
+      }
+      row = (data as MessageRow | null) ?? null;
+      // Si le wamid n'est pas encore en base, on peut quand même répondre via Meta
+      if (!row && (raw.startsWith('wamid.') || raw.startsWith('wamid'))) {
+        return {
+          watiMessageId: raw,
+          preview: 'Message',
+          authorLabel: contactName?.trim() || 'Contact',
+        };
+      }
+    }
+
+    if (!row || String(row.conversation_id) !== conversationId) {
+      throw new BadRequestException({
+        message: 'Message cité introuvable dans cette conversation.',
+      });
+    }
+
+    const wamid =
+      typeof row.wati_message_id === 'string'
+        ? row.wati_message_id.trim()
+        : '';
+    if (!wamid) {
+      throw new BadRequestException({
+        message:
+          'Ce message n’a pas d’id Meta — impossible de répondre avec citation WhatsApp.',
+      });
+    }
+
+    const type = String(row.type ?? 'text');
+    const body = String(row.body ?? '');
+    const preview =
+      type === 'audio'
+        ? 'Audio'
+        : type === 'image'
+          ? 'Photo'
+          : type === 'video'
+            ? 'Vidéo'
+            : type === 'document'
+              ? 'Document'
+              : body.trim().slice(0, 120) || 'Message';
+
+    const authorLabel =
+      row.direction === 'outbound'
+        ? 'Vous'
+        : contactName?.trim() || 'Contact';
+
+    return { watiMessageId: wamid, preview, authorLabel };
   }
 
   async broadcastMessage(dto: BroadcastWhatsappMessageDto): Promise<{
@@ -562,21 +882,83 @@ export class WhatsappService {
       const phone = normalizePhoneNumber(from);
       const type = pickStr(msg, 'type') || 'text';
 
-      if (type === 'audio') {
-        // Debug: full Meta inbound audio message object
-        // eslint-disable-next-line no-console -- debug Meta audio webhook shape
-        console.log('[WEBHOOK AUDIO]', JSON.stringify(msg, null, 2));
-      }
-
-      const text = extractMetaMessageBody(msg);
+      let text = extractMetaMessageBody(msg);
       const metaMessageId = pickStr(msg, 'id');
       const sentAt =
         parseWebhookTimestamp(pickStr(msg, 'timestamp')) ??
         new Date().toISOString();
+
+      let mediaUrl: string | null = null;
+      let fileName: string | null = null;
+      let fileSize: number | null = null;
+
+      if (INBOUND_MEDIA_TYPES.has(type)) {
+        const block = extractMetaMediaBlock(msg, type);
+        fileName = block?.fileName || null;
+        const mediaId = block?.mediaId || '';
+
+        if (mediaId) {
+          try {
+            const ingested = await this.ingestInboundMetaMedia({
+              type,
+              mediaId,
+              fileName,
+              mimeType: block?.mimeType || '',
+            });
+            mediaUrl = ingested.mediaUrl;
+            fileName = ingested.fileName;
+            fileSize = ingested.fileSize;
+            if (!text.trim()) {
+              text =
+                type === 'document'
+                  ? fileName || 'Document'
+                  : type === 'image'
+                    ? 'Photo'
+                    : type === 'video'
+                      ? 'Vidéo'
+                      : type === 'audio'
+                        ? 'Audio'
+                        : '';
+            }
+          } catch (err: unknown) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            this.logger.warn(
+              `${prefix} message[${mi}] media ingest failed type=${type} mediaId=${mediaId}: ${errMsg}`,
+            );
+            if (!text.trim()) text = MEDIA_UNAVAILABLE;
+          }
+        } else {
+          this.logger.warn(
+            `${prefix} message[${mi}] media type=${type} without media_id`,
+          );
+          if (!text.trim()) text = MEDIA_UNAVAILABLE;
+        }
+      }
+
       const preview = previewForConversation(type, text);
 
+      // Meta reply context: { from, id: wamid of quoted message }
+      const replyCtx = extractReplyContext(msg);
+      const replyToWamid = replyCtx.wamid;
+
+      if (replyToWamid) {
+        this.logger.log(
+          `${prefix} message[${mi}] HAS reply context id=${replyToWamid}`,
+        );
+      } else {
+        // Help diagnose missing quotes: log keys + whether context exists
+        this.logger.log(
+          `${prefix} message[${mi}] no reply context — keys=${Object.keys(msg).join(',')} contextType=${typeof msg.context}`,
+        );
+        if (msg.context) {
+          this.logger.log(
+            `${prefix} message[${mi}] context raw=${JSON.stringify(msg.context).slice(0, 400)}`,
+          );
+        }
+      }
+
       this.logger.log(
-        `${prefix} parse message[${mi}] from=${from} phone=${phone} type=${type} metaId=${metaMessageId} body="${text.slice(0, 200)}${text.length > 200 ? '…' : ''}"`,
+        `${prefix} parse message[${mi}] from=${from} phone=${phone} type=${type} metaId=${metaMessageId} replyTo=${replyToWamid || '(none)'} mediaUrl=${mediaUrl ? 'yes' : 'no'} body="${text.slice(0, 200)}${text.length > 200 ? '…' : ''}"`,
       );
 
       if (!phone) {
@@ -586,9 +968,11 @@ export class WhatsappService {
         continue;
       }
 
+      const contactName = contactNameByWaId.get(from) || null;
+
       const conv = await this.findOrCreateConversation({
         phone,
-        contactName: contactNameByWaId.get(from) || null,
+        contactName,
         watiContactId: from || phone,
         watiConversationId: null,
         source: 'meta',
@@ -597,11 +981,40 @@ export class WhatsappService {
         incrementUnread: true,
       });
 
-      if (!metaMessageId && !text) {
+      if (!metaMessageId && !text && !mediaUrl) {
         this.logger.warn(
           `${prefix} message[${mi}] skipped persist — no metaMessageId and empty body`,
         );
         continue;
+      }
+
+      let replyToPreview: string | null = null;
+      let replyToAuthor: string | null = null;
+      if (replyToWamid) {
+        const quoted = await this.findMessageByWamid(replyToWamid);
+        if (quoted) {
+          const qType = String(quoted.type ?? 'text');
+          const qBody = String(quoted.body ?? '');
+          replyToPreview =
+            qType === 'audio'
+              ? 'Audio'
+              : qType === 'image'
+                ? 'Photo'
+                : qType === 'video'
+                  ? 'Vidéo'
+                  : qType === 'document'
+                    ? 'Document'
+                    : qBody.trim().slice(0, 120) || 'Message';
+          replyToAuthor =
+            quoted.direction === 'outbound'
+              ? 'Vous'
+              : contactName?.trim() ||
+                conv.contact_name?.trim() ||
+                'Contact';
+        } else {
+          replyToPreview = 'Message';
+          replyToAuthor = 'Vous';
+        }
       }
 
       await this.persistMessage({
@@ -614,6 +1027,12 @@ export class WhatsappService {
         watiLocalId: null,
         sentAt,
         incrementUnread: false,
+        replyToWatiMessageId: replyToWamid || null,
+        replyToPreview,
+        replyToAuthor,
+        mediaUrl,
+        fileName,
+        fileSize,
       });
 
       try {
@@ -791,6 +1210,68 @@ export class WhatsappService {
       .eq('id', id);
   }
 
+  private async findMessageByWamid(
+    watiMessageId: string,
+  ): Promise<MessageRow | null> {
+    const id = watiMessageId.trim();
+    if (!id) return null;
+    const { data, error } = await this.supabase
+      .getClient()
+      .from('whatsapp_messages')
+      .select(MESSAGE_SELECT)
+      .eq('wati_message_id', id)
+      .maybeSingle();
+    if (error) {
+      this.logger.warn(
+        `findMessageByWamid failed: ${formatSupabaseError(error)}`,
+      );
+      return null;
+    }
+    return (data as MessageRow | null) ?? null;
+  }
+
+  /**
+   * Meta media_id → download (Bearer) → Cloudinary → public URL for the chat UI.
+   */
+  private async ingestInboundMetaMedia(input: {
+    type: string;
+    mediaId: string;
+    fileName?: string | null;
+    mimeType?: string;
+  }): Promise<{
+    mediaUrl: string;
+    fileName: string;
+    fileSize: number | null;
+  }> {
+    const downloaded = await this.meta.downloadMedia(input.mediaId);
+    const mimeType = input.mimeType?.trim() || downloaded.mimeType;
+    const ext = extensionFromMime(mimeType, input.type);
+    const fileName =
+      input.fileName?.trim() ||
+      `${input.type}-${input.mediaId.slice(-8)}.${ext}`;
+    const resourceType = cloudinaryResourceTypeFor(input.type);
+
+    const uploaded = await this.cloudinary.uploadWhatsAppInboundBuffer(
+      downloaded.buffer,
+      {
+        resourceType,
+        fileName,
+        mimeType,
+        folder: '63agency/whatsapp/inbound',
+      },
+    );
+
+    this.logger.log(
+      `[inbound media] type=${input.type} mediaId=${input.mediaId} → cloudinary ${uploaded.publicId}`,
+    );
+
+    return {
+      mediaUrl: uploaded.secureUrl,
+      fileName,
+      fileSize: uploaded.bytes ?? downloaded.fileSize,
+    };
+  }
+
   private async persistMessage(input: {
     conversationId: string;
     direction: MessageDirection;
@@ -801,13 +1282,19 @@ export class WhatsappService {
     watiLocalId: string | null;
     sentAt: string;
     incrementUnread: boolean;
+    replyToWatiMessageId?: string | null;
+    replyToPreview?: string | null;
+    replyToAuthor?: string | null;
+    mediaUrl?: string | null;
+    fileName?: string | null;
+    fileSize?: number | null;
   }): Promise<WhatsappMessage> {
     this.logger.log(
-      `[Supabase message] save conversationId=${input.conversationId} direction=${input.direction} metaId=${input.watiMessageId ?? ''} body="${input.body.slice(0, 120)}${input.body.length > 120 ? '…' : ''}"`,
+      `[Supabase message] save conversationId=${input.conversationId} direction=${input.direction} metaId=${input.watiMessageId ?? ''} replyTo=${input.replyToWatiMessageId ?? ''} body="${input.body.slice(0, 120)}${input.body.length > 120 ? '…' : ''}"`,
     );
 
     const sb = this.supabase.getClient();
-    const row = {
+    const row: Record<string, unknown> = {
       conversation_id: input.conversationId,
       direction: input.direction,
       body: input.body,
@@ -817,15 +1304,26 @@ export class WhatsappService {
       wati_local_id: input.watiLocalId,
       sent_at: input.sentAt,
       created_at: input.sentAt,
+      reply_to_wati_message_id: input.replyToWatiMessageId ?? null,
+      reply_to_preview: input.replyToPreview ?? null,
+      reply_to_author: input.replyToAuthor ?? null,
     };
+
+    if (input.mediaUrl !== undefined) {
+      row.media_url = input.mediaUrl;
+    }
+    if (input.fileName !== undefined) {
+      row.file_name = input.fileName;
+    }
+    if (input.fileSize !== undefined) {
+      row.file_size = input.fileSize;
+    }
 
     if (input.watiMessageId) {
       const { data, error } = await sb
         .from('whatsapp_messages')
         .upsert(row, { onConflict: 'wati_message_id' })
-        .select(
-          'id, conversation_id, direction, body, type, status, wati_message_id, sent_at, created_at',
-        )
+        .select(MESSAGE_SELECT)
         .single();
       if (!error && data) {
         this.logger.log(
@@ -847,9 +1345,7 @@ export class WhatsappService {
     const { data, error } = await sb
       .from('whatsapp_messages')
       .insert(row)
-      .select(
-        'id, conversation_id, direction, body, type, status, wati_message_id, sent_at, created_at',
-      )
+      .select(MESSAGE_SELECT)
       .single();
 
     if (error || !data) {
