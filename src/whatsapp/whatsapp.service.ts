@@ -838,9 +838,19 @@ export class WhatsappService {
       const st = raw as Record<string, unknown>;
       const messageId = pickStr(st, 'id');
       const status = pickStr(st, 'status');
+      const errors = Array.isArray(st.errors) ? st.errors : [];
+      const errorDetail =
+        errors.length > 0 && errors[0] && typeof errors[0] === 'object'
+          ? JSON.stringify(errors[0])
+          : '';
       this.logger.log(
-        `${prefix} status update messageId=${messageId} status=${status}`,
+        `${prefix} status update messageId=${messageId} status=${status}${errorDetail ? ` error=${errorDetail}` : ''}`,
       );
+      if (status.toLowerCase().includes('fail')) {
+        this.logger.warn(
+          `${prefix} delivery FAILED messageId=${messageId}${errorDetail ? ` — ${errorDetail}` : ''}`,
+        );
+      }
       if (messageId) {
         await this.updateMessageStatus(messageId, status);
       }
