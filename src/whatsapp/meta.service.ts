@@ -331,21 +331,39 @@ export class MetaService {
 
     const languageCode = language.trim() || 'fr';
 
-    // Body params only when variable1 is a real value.
-    // Empty / undefined / "{{1}}" → components: [] (e.g. proposal_sent_status).
-    // Ignores incoming components to avoid #132000 on no-variable templates.
+    // Prefer explicit body components when they contain real text params
+    // (e.g. meeting_reminder_date with {{1}} {{2}} {{3}}).
+    // Otherwise fall back to variable1. Empty / "{{n}}" → components: []
+    // to avoid Meta #132000 on no-variable templates.
+    const bodyParamsFromComponents = (_components ?? [])
+      .filter((c) => String(c.type).toLowerCase() === 'body')
+      .flatMap((c) => c.parameters ?? [])
+      .map((p) => String(p.text ?? '').trim())
+      .filter((t) => t && !/^\{\{\d+\}\}$/.test(t));
+
     const rawVariable1 = variable1?.trim() ?? '';
     const resolvedVariable1 =
       rawVariable1 && !/^\{\{\d+\}\}$/.test(rawVariable1) ? rawVariable1 : '';
 
-    const templateComponents = resolvedVariable1
-      ? [
-          {
-            type: 'body',
-            parameters: [{ type: 'text', text: resolvedVariable1 }],
-          },
-        ]
-      : [];
+    const templateComponents =
+      bodyParamsFromComponents.length > 0
+        ? [
+            {
+              type: 'body',
+              parameters: bodyParamsFromComponents.map((text) => ({
+                type: 'text',
+                text,
+              })),
+            },
+          ]
+        : resolvedVariable1
+          ? [
+              {
+                type: 'body',
+                parameters: [{ type: 'text', text: resolvedVariable1 }],
+              },
+            ]
+          : [];
 
     const payload = {
       messaging_product: 'whatsapp',
@@ -359,7 +377,11 @@ export class MetaService {
     };
 
     this.logger.log(
-      `Meta sendTemplate variable1=${JSON.stringify(resolvedVariable1 || null)}`,
+      `Meta sendTemplate bodyParams=${JSON.stringify(
+        bodyParamsFromComponents.length > 0
+          ? bodyParamsFromComponents
+          : resolvedVariable1 || null,
+      )}`,
     );
     this.logger.log(
       `Meta sendTemplate payload=${JSON.stringify(payload)}`,
@@ -401,8 +423,14 @@ export class MetaService {
       });
     }
 
-    const preview = resolvedVariable1
-      ? `[Template: ${templateName}] ${resolvedVariable1}`
+    const previewTexts =
+      bodyParamsFromComponents.length > 0
+        ? bodyParamsFromComponents
+        : resolvedVariable1
+          ? [resolvedVariable1]
+          : [];
+    const preview = previewTexts.length
+      ? `[Template: ${templateName}] ${previewTexts.join(' | ')}`
       : `[Template: ${templateName}]`;
 
     return {

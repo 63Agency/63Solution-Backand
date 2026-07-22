@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
+import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -10,6 +11,7 @@ import { CloudinaryModule } from './cloudinary/cloudinary.module';
 import { ClientsModule } from './clients/clients.module';
 import { DevisModule } from './devis/devis.module';
 import { FacturesModule } from './factures/factures.module';
+import { MeetingsModule } from './meetings/meetings.module';
 import { PropositionsModule } from './propositions/propositions.module';
 import { SupabaseModule } from './supabase/supabase.module';
 import { NotificationsModule } from './notifications/notifications.module';
@@ -22,6 +24,7 @@ import { WhatsappModule } from './whatsapp/whatsapp.module';
       isGlobal: true,
       envFilePath: ['.env', '.env.local'],
     }),
+    ScheduleModule.forRoot(),
     ThrottlerModule.forRoot([{ ttl: 60_000, limit: 120 }]),
     SupabaseModule,
     AuthModule,
@@ -31,6 +34,7 @@ import { WhatsappModule } from './whatsapp/whatsapp.module';
     DevisModule,
     FacturesModule,
     PropositionsModule,
+    MeetingsModule,
     UsersModule,
     NotificationsModule,
     WhatsappModule,

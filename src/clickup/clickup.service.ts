@@ -39,8 +39,17 @@ function mapLeadRow(row: LeadRow): ClickUpLead {
 
 const CLICKUP_API = 'https://api.clickup.com/api/v2';
 const DEFAULT_TEAM_ID = '9012949492';
+/** Fallback when CLICKUP_LIST_IDS is missing / empty. */
+const DEFAULT_LIST_ID = '901214985003';
 
 type ClickUpListRef = { id: string; name: string };
+
+type ListSyncStats = {
+  fetched: number;
+  inserted: number;
+  updated: number;
+  skipped: number;
+};
 
 @Injectable()
 export class ClickupService {
@@ -67,6 +76,22 @@ export class ClickupService {
     );
   }
 
+  /** Parse CLICKUP_LIST_IDS (comma-separated). Fallback to DEFAULT_LIST_ID. */
+  private getConfiguredListIds(): string[] {
+    const raw = this.config.get<string>('CLICKUP_LIST_IDS') ?? '';
+    const ids = raw
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+
+    if (ids.length > 0) return ids;
+
+    this.logger.warn(
+      `[ClickUpSync] CLICKUP_LIST_IDS missing — fallback list=${DEFAULT_LIST_ID}`,
+    );
+    return [DEFAULT_LIST_ID];
+  }
+
   private async clickUpGet<T>(path: string): Promise<T> {
     const url = `${CLICKUP_API}${path}`;
     const res = await fetch(url, {
@@ -91,37 +116,15 @@ export class ClickupService {
     return raw as T;
   }
 
-  private async collectAllLists(teamId: string): Promise<ClickUpListRef[]> {
-    const lists: ClickUpListRef[] = [];
-    const spacesRes = await this.clickUpGet<{ spaces?: { id: string; name?: string }[] }>(
-      `/team/${encodeURIComponent(teamId)}/space?archived=false`,
-    );
-
-    for (const space of spacesRes.spaces ?? []) {
-      const spaceId = String(space.id);
-
-      const folderlessRes = await this.clickUpGet<{ lists?: { id: string; name?: string }[] }>(
-        `/space/${encodeURIComponent(spaceId)}/list?archived=false`,
+  private async resolveListRef(listId: string): Promise<ClickUpListRef> {
+    try {
+      const res = await this.clickUpGet<{ name?: string }>(
+        `/list/${encodeURIComponent(listId)}`,
       );
-      for (const list of folderlessRes.lists ?? []) {
-        lists.push({ id: String(list.id), name: String(list.name ?? '') });
-      }
-
-      const foldersRes = await this.clickUpGet<{ folders?: { id: string; name?: string }[] }>(
-        `/space/${encodeURIComponent(spaceId)}/folder?archived=false`,
-      );
-      for (const folder of foldersRes.folders ?? []) {
-        const folderId = String(folder.id);
-        const folderListsRes = await this.clickUpGet<{ lists?: { id: string; name?: string }[] }>(
-          `/folder/${encodeURIComponent(folderId)}/list?archived=false`,
-        );
-        for (const list of folderListsRes.lists ?? []) {
-          lists.push({ id: String(list.id), name: String(list.name ?? '') });
-        }
-      }
+      return { id: listId, name: String(res.name ?? '').trim() };
+    } catch {
+      return { id: listId, name: '' };
     }
-
-    return lists;
   }
 
   private async fetchAllTasksFromList(
@@ -150,28 +153,113 @@ export class ClickupService {
     return tasks;
   }
 
-  async syncAllLeads(): Promise<number> {
-    const teamId = this.getTeamId();
-    this.logger.log(`ClickUp sync starting for team=${teamId}`);
+  /** Ensure list_id / list_name are always set from the sync source list. */
+  private withListSource(
+    task: Record<string, unknown>,
+    list: ClickUpListRef,
+  ): Record<string, unknown> {
+    const existing =
+      task.list && typeof task.list === 'object'
+        ? (task.list as Record<string, unknown>)
+        : {};
+    const existingName =
+      typeof existing.name === 'string' ? existing.name.trim() : '';
 
-    const lists = await this.collectAllLists(teamId);
-    this.logger.log(`ClickUp sync: ${lists.length} lists found`);
+    return {
+      ...task,
+      list: {
+        ...existing,
+        id: list.id,
+        name: list.name || existingName || list.id,
+      },
+    };
+  }
 
-    let synced = 0;
-    for (const list of lists) {
-      const tasks = await this.fetchAllTasksFromList(list.id);
-      this.logger.log(
-        `ClickUp sync: list=${list.name || list.id} tasks=${tasks.length}`,
+  private async leadExists(id: string): Promise<boolean> {
+    const { data, error } = await this.supabase
+      .getClient()
+      .from('clickup_leads')
+      .select('id')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (error) {
+      this.logger.warn(
+        `[ClickUpSync] leadExists check failed id=${id}: ${error.message}`,
       );
+      return false;
+    }
+    return Boolean(data?.id);
+  }
 
-      for (const task of tasks) {
-        await this.saveOrUpdateLead(task);
-        synced += 1;
+  async syncAllLeads(): Promise<number> {
+    const listIds = this.getConfiguredListIds();
+    this.logger.log(
+      `[ClickUpSync] starting lists=${listIds.length} team=${this.getTeamId()}`,
+    );
+
+    let listsOk = 0;
+    let listsFailed = 0;
+    let totalLeads = 0;
+
+    for (const listId of listIds) {
+      try {
+        const list = await this.resolveListRef(listId);
+        const stats = await this.syncOneList(list);
+        listsOk += 1;
+        totalLeads += stats.inserted + stats.updated;
+
+        this.logger.log(
+          `[ClickUpSync] list=${list.id} name=${list.name || '-'} fetched=${stats.fetched} inserted=${stats.inserted} updated=${stats.updated} skipped=${stats.skipped}`,
+        );
+      } catch (err) {
+        listsFailed += 1;
+        const message = err instanceof Error ? err.message : String(err);
+        this.logger.error(
+          `[ClickUpSync] list=${listId} FAILED: ${message}`,
+        );
       }
     }
 
-    this.logger.log(`ClickUp sync complete: ${synced} leads synced`);
-    return synced;
+    this.logger.log(
+      `[ClickUpSync] TOTAL lists=${listIds.length} ok=${listsOk} failed=${listsFailed} leads=${totalLeads}`,
+    );
+
+    return totalLeads;
+  }
+
+  private async syncOneList(list: ClickUpListRef): Promise<ListSyncStats> {
+    const tasks = await this.fetchAllTasksFromList(list.id);
+    const stats: ListSyncStats = {
+      fetched: tasks.length,
+      inserted: 0,
+      updated: 0,
+      skipped: 0,
+    };
+
+    for (const task of tasks) {
+      try {
+        const enriched = this.withListSource(task, list);
+        const mapped = mapClickUpTaskToLead(enriched);
+        if (!mapped.id) {
+          stats.skipped += 1;
+          continue;
+        }
+
+        const existed = await this.leadExists(mapped.id);
+        await this.saveOrUpdateLead(enriched);
+        if (existed) stats.updated += 1;
+        else stats.inserted += 1;
+      } catch (err) {
+        stats.skipped += 1;
+        const message = err instanceof Error ? err.message : String(err);
+        this.logger.warn(
+          `[ClickUpSync] list=${list.id} task skipped: ${message}`,
+        );
+      }
+    }
+
+    return stats;
   }
 
   async resolveTaskFromWebhook(

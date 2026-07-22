@@ -6,6 +6,7 @@ type SendMailInput = {
   to: string;
   subject: string;
   text: string;
+  html?: string;
   attachments?: Array<{ filename: string; content: Buffer; contentType?: string }>;
 };
 
@@ -59,6 +60,7 @@ export class MailerService {
         to: input.to,
         subject: input.subject,
         text: input.text,
+        html: input.html,
         attachments: input.attachments,
       });
       return {

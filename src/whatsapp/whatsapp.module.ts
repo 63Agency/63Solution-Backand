@@ -16,6 +16,6 @@ import { WhatsappService } from './whatsapp.service';
     WhatsappWebhookController,
   ],
   providers: [WhatsappService, MetaService],
-  exports: [WhatsappService],
+  exports: [WhatsappService, MetaService],
 })
 export class WhatsappModule {}

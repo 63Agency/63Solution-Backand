@@ -1,0 +1,84 @@
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  Patch,
+  Post,
+  Query,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
+import { AuthGuard } from '@nestjs/passport';
+import type { AppUser } from '../auth/types/app-user';
+import { assertFullAdmin } from '../common/utils/access';
+import { CreateMeetingDto } from './dto/create-meeting.dto';
+import { ListMeetingsQueryDto } from './dto/list-meetings-query.dto';
+import { UpdateMeetingDto } from './dto/update-meeting.dto';
+import { MeetingsReminderService } from './meetings-reminder.service';
+import { MeetingsService } from './meetings.service';
+
+@Controller('meetings')
+@UseGuards(AuthGuard('jwt'))
+export class MeetingsController {
+  constructor(
+    private readonly meetings: MeetingsService,
+    private readonly reminders: MeetingsReminderService,
+  ) {}
+
+  @Get()
+  list(
+    @Query() query: ListMeetingsQueryDto,
+    @Req() req: { user: AppUser },
+  ) {
+    return this.meetings.list(query, req.user);
+  }
+
+  @Get('upcoming')
+  upcoming(@Req() req: { user: AppUser }) {
+    return this.meetings.upcoming(req.user);
+  }
+
+  @Get('today')
+  today(@Req() req: { user: AppUser }) {
+    return this.meetings.today(req.user);
+  }
+
+  @Get('stats')
+  stats(@Req() req: { user: AppUser }) {
+    return this.meetings.stats(req.user);
+  }
+
+  @Post()
+  @HttpCode(HttpStatus.CREATED)
+  create(@Body() dto: CreateMeetingDto, @Req() req: { user: AppUser }) {
+    return this.meetings.create(dto, req.user);
+  }
+
+  @Patch(':id')
+  patch(
+    @Param('id') id: string,
+    @Body() dto: UpdateMeetingDto,
+    @Req() req: { user: AppUser },
+  ) {
+    return this.meetings.update(id, dto, req.user);
+  }
+
+  @Delete(':id')
+  remove(@Param('id') id: string, @Req() req: { user: AppUser }) {
+    return this.meetings.remove(id, req.user);
+  }
+
+  /** Admin-only: force-send WhatsApp / email reminder for testing. */
+  @Post(':id/send-reminder')
+  async sendReminder(
+    @Param('id') id: string,
+    @Req() req: { user: AppUser },
+  ) {
+    assertFullAdmin(req.user);
+    return this.reminders.sendReminderForMeetingId(id, { force: true });
+  }
+}
