@@ -1,6 +1,8 @@
 import {
   BadRequestException,
   ConflictException,
+  forwardRef,
+  Inject,
   Injectable,
   Logger,
   NotFoundException,
@@ -11,12 +13,18 @@ import { SupabaseService } from '../supabase/supabase.service';
 import type { CreateMeetingDto } from './dto/create-meeting.dto';
 import type { ListMeetingsQueryDto } from './dto/list-meetings-query.dto';
 import type { UpdateMeetingDto } from './dto/update-meeting.dto';
+import { GoogleMeetService } from './google-meet.service';
+import { MeetingsReminderService } from './meetings-reminder.service';
 import type { Meeting, MeetingRow, MeetingStatus } from './types/meeting.types';
 import {
   casablancaDayBounds,
   casablancaWeekBounds,
+  isMeetingWithinHours,
 } from './utils/meeting-datetime';
 import { normalizeMeetingPhone } from './utils/meeting-phone';
+
+/** Only these statuses receive reminders / are treated as active. */
+const ACTIVE_REMINDER_STATUSES: MeetingStatus[] = ['scheduled'];
 
 function clean(value: string | undefined | null): string {
   return (value ?? '').trim();
@@ -35,19 +43,26 @@ function mapMeetingRow(r: MeetingRow): Meeting {
     reminderWhatsappSent: Boolean(r.reminder_whatsapp_sent),
     reminderEmailSent: Boolean(r.reminder_email_sent),
     notes: r.notes != null ? String(r.notes) : null,
+    meetLink: r.meet_link ? String(r.meet_link) : null,
+    meetSpace: r.meet_space ? String(r.meet_space) : null,
     createdAt: String(r.created_at ?? ''),
     updatedAt: String(r.updated_at ?? ''),
   };
 }
 
 const SELECT_COLS =
-  'id, lead_id, title, meeting_date, contact_name, contact_phone, contact_email, status, reminder_whatsapp_sent, reminder_email_sent, notes, created_at, updated_at';
+  'id, lead_id, title, meeting_date, contact_name, contact_phone, contact_email, status, reminder_whatsapp_sent, reminder_email_sent, notes, meet_link, meet_space, created_at, updated_at';
 
 @Injectable()
 export class MeetingsService {
   private readonly logger = new Logger(MeetingsService.name);
 
-  constructor(private readonly supabase: SupabaseService) {}
+  constructor(
+    private readonly supabase: SupabaseService,
+    private readonly googleMeet: GoogleMeetService,
+    @Inject(forwardRef(() => MeetingsReminderService))
+    private readonly reminders: MeetingsReminderService,
+  ) {}
 
   async list(query: ListMeetingsQueryDto, user: AppUser) {
     assertFullAdmin(user);
@@ -186,6 +201,9 @@ export class MeetingsService {
       });
     }
 
+    const meet = await this.googleMeet.createSpace();
+    const meetingDateIso = new Date(meetingDate).toISOString();
+
     const now = new Date().toISOString();
     const sb = this.supabase.getClient();
     const { data, error } = await sb
@@ -193,12 +211,14 @@ export class MeetingsService {
       .insert({
         lead_id: leadId,
         title,
-        meeting_date: new Date(meetingDate).toISOString(),
+        meeting_date: meetingDateIso,
         contact_name: contactName,
         contact_phone: contactPhone,
         contact_email: contactEmail,
         status,
         notes,
+        meet_link: meet?.meetLink ?? null,
+        meet_space: meet?.spaceName ?? null,
         reminder_whatsapp_sent: false,
         reminder_email_sent: false,
         created_at: now,
@@ -213,8 +233,125 @@ export class MeetingsService {
       });
     }
 
-    this.logger.log(`Meeting created id=${data.id}`);
+    let meeting = mapMeetingRow(data as MeetingRow);
+
+    // Meeting < 24h away: cron window will never catch it → remind now.
+    if (
+      ACTIVE_REMINDER_STATUSES.includes(meeting.status) &&
+      isMeetingWithinHours(meeting.meetingDate, 24)
+    ) {
+      this.logger.log(
+        `Meeting id=${meeting.id} within 24h — sending reminder immediately`,
+      );
+      try {
+        await this.reminders.sendReminderForMeetingId(meeting.id, {
+          force: false,
+        });
+        meeting = await this.findById(meeting.id);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.logger.warn(
+          `Immediate reminder failed id=${meeting.id}: ${message}`,
+        );
+      }
+    }
+
+    this.logger.log(
+      `Meeting created id=${meeting.id} meet=${meet?.meetLink ? 'yes' : 'no'}`,
+    );
+    return meeting;
+  }
+
+  async regenerateMeetLink(id: string, user: AppUser) {
+    assertFullAdmin(user);
+    await this.findRowOrThrow(id);
+
+    const meet = await this.googleMeet.createSpace();
+    if (!meet) {
+      throw new ConflictException({
+        message: 'Impossible de générer un lien Google Meet.',
+      });
+    }
+
+    const sb = this.supabase.getClient();
+    const { data, error } = await sb
+      .from('meetings')
+      .update({
+        meet_link: meet.meetLink,
+        meet_space: meet.spaceName,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', id)
+      .select(SELECT_COLS)
+      .single();
+
+    if (error || !data) {
+      throw new ConflictException({
+        message: error?.message ?? 'Mise à jour du lien Meet impossible',
+      });
+    }
+
+    this.logger.log(`Meeting meet link regenerated id=${id}`);
     return mapMeetingRow(data as MeetingRow);
+  }
+
+  /** Generate Meet links for all future meetings missing meet_link. */
+  async backfillMeetLinks(user: AppUser) {
+    assertFullAdmin(user);
+    const nowIso = new Date().toISOString();
+    const sb = this.supabase.getClient();
+
+    const { data, error } = await sb
+      .from('meetings')
+      .select(SELECT_COLS)
+      .gte('meeting_date', nowIso)
+      .is('meet_link', null)
+      .order('meeting_date', { ascending: true });
+
+    if (error) {
+      throw new ConflictException({ message: error.message });
+    }
+
+    const rows = (data ?? []) as MeetingRow[];
+    let updated = 0;
+    let failed = 0;
+
+    for (const row of rows) {
+      try {
+        const meet = await this.googleMeet.createSpace();
+        if (!meet) {
+          failed += 1;
+          continue;
+        }
+
+        const { error: updErr } = await sb
+          .from('meetings')
+          .update({
+            meet_link: meet.meetLink,
+            meet_space: meet.spaceName,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', row.id);
+
+        if (updErr) {
+          failed += 1;
+          this.logger.warn(
+            `backfillMeetLinks update failed id=${row.id}: ${updErr.message}`,
+          );
+          continue;
+        }
+        updated += 1;
+      } catch (err) {
+        failed += 1;
+        const message = err instanceof Error ? err.message : String(err);
+        this.logger.warn(`backfillMeetLinks failed id=${row.id}: ${message}`);
+      }
+    }
+
+    this.logger.log(
+      `[MeetBackfill] found=${rows.length} updated=${updated} failed=${failed}`,
+    );
+    return { found: rows.length, updated, failed };
   }
 
   async update(id: string, dto: UpdateMeetingDto, user: AppUser) {
@@ -237,7 +374,14 @@ export class MeetingsService {
       if (!dto.meetingDate || Number.isNaN(Date.parse(dto.meetingDate))) {
         throw new BadRequestException({ message: 'meetingDate invalide' });
       }
-      patch.meeting_date = new Date(dto.meetingDate).toISOString();
+      const nextIso = new Date(dto.meetingDate).toISOString();
+      patch.meeting_date = nextIso;
+
+      // Reschedule → allow a fresh reminder for the new slot.
+      if (nextIso !== existing.meeting_date) {
+        patch.reminder_whatsapp_sent = false;
+        patch.reminder_email_sent = false;
+      }
     }
 
     if (dto.contactName !== undefined) {
@@ -304,8 +448,32 @@ export class MeetingsService {
       });
     }
 
+    let meeting = mapMeetingRow(data as MeetingRow);
+
+    // If rescheduled within 24h, remind immediately (same gap as create).
+    if (
+      patch.meeting_date !== undefined &&
+      ACTIVE_REMINDER_STATUSES.includes(meeting.status) &&
+      isMeetingWithinHours(meeting.meetingDate, 24)
+    ) {
+      this.logger.log(
+        `Meeting id=${meeting.id} rescheduled within 24h — sending reminder immediately`,
+      );
+      try {
+        await this.reminders.sendReminderForMeetingId(meeting.id, {
+          force: false,
+        });
+        meeting = await this.findById(meeting.id);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.logger.warn(
+          `Immediate reminder after reschedule failed id=${meeting.id}: ${message}`,
+        );
+      }
+    }
+
     this.logger.log(`Meeting updated id=${id}`);
-    return mapMeetingRow(data as MeetingRow);
+    return meeting;
   }
 
   async remove(id: string, user: AppUser) {
@@ -348,7 +516,7 @@ export class MeetingsService {
     const { data, error } = await sb
       .from('meetings')
       .select(SELECT_COLS)
-      .eq('status', 'scheduled')
+      .in('status', ACTIVE_REMINDER_STATUSES)
       .gte('meeting_date', windowStart.toISOString())
       .lte('meeting_date', windowEnd.toISOString())
       .order('meeting_date', { ascending: true });

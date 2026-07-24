@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { forwardRef, Inject, Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { MailerService } from '../common/mailer/mailer.service';
 import { MetaService } from '../whatsapp/meta.service';
@@ -6,8 +6,7 @@ import { MeetingsService } from './meetings.service';
 import type { Meeting } from './types/meeting.types';
 import {
   firstNameOnly,
-  formatMeetingDateFr,
-  formatMeetingTimeFr,
+  formatMeetingDate,
 } from './utils/meeting-datetime';
 
 @Injectable()
@@ -15,6 +14,7 @@ export class MeetingsReminderService {
   private readonly logger = new Logger(MeetingsReminderService.name);
 
   constructor(
+    @Inject(forwardRef(() => MeetingsService))
     private readonly meetings: MeetingsService,
     private readonly meta: MetaService,
     private readonly mailer: MailerService,
@@ -106,6 +106,14 @@ export class MeetingsReminderService {
     let emailSent = false;
     let failures = 0;
 
+    // Never remind cancelled / done / no_show meetings.
+    if (meeting.status !== 'scheduled') {
+      this.logger.log(
+        `[MeetingsReminder] skip id=${meeting.id} status=${meeting.status}`,
+      );
+      return { whatsappSent, emailSent, failures };
+    }
+
     const shouldWhatsapp =
       Boolean(meeting.contactPhone) &&
       (options.force || !meeting.reminderWhatsappSent);
@@ -146,8 +154,28 @@ export class MeetingsReminderService {
 
   private async sendWhatsappReminder(meeting: Meeting): Promise<void> {
     const prenom = firstNameOnly(meeting.contactName);
-    const dateFr = formatMeetingDateFr(meeting.meetingDate);
-    const timeFr = formatMeetingTimeFr(meeting.meetingDate);
+    const { date, time } = formatMeetingDate(meeting.meetingDate);
+    const meetLink = meeting.meetLink?.trim() || '';
+
+    if (meetLink) {
+      await this.meta.sendTemplateMessage(
+        meeting.contactPhone!,
+        'meeting_reminder_meet',
+        'fr',
+        [
+          {
+            type: 'body',
+            parameters: [
+              { type: 'text', text: prenom },
+              { type: 'text', text: date },
+              { type: 'text', text: time },
+              { type: 'text', text: meetLink },
+            ],
+          },
+        ],
+      );
+      return;
+    }
 
     await this.meta.sendTemplateMessage(
       meeting.contactPhone!,
@@ -158,8 +186,8 @@ export class MeetingsReminderService {
           type: 'body',
           parameters: [
             { type: 'text', text: prenom },
-            { type: 'text', text: dateFr },
-            { type: 'text', text: timeFr },
+            { type: 'text', text: date },
+            { type: 'text', text: time },
           ],
         },
       ],
@@ -167,28 +195,35 @@ export class MeetingsReminderService {
   }
 
   private async sendEmailReminder(meeting: Meeting): Promise<void> {
-    const dateFr = formatMeetingDateFr(meeting.meetingDate);
-    const timeFr = formatMeetingTimeFr(meeting.meetingDate);
+    const { date, time } = formatMeetingDate(meeting.meetingDate);
     const name = meeting.contactName.trim();
+    const meetLink = meeting.meetLink?.trim() || '';
 
-    const text = [
+    const lines = [
       `Bonjour ${name},`,
       '',
       `Nous vous rappelons votre rendez-vous « ${meeting.title} ».`,
       '',
-      `Date : ${dateFr}`,
-      `Heure : ${timeFr}`,
+      `Date : ${date}`,
+      `Heure : ${time}`,
+    ];
+
+    if (meetLink) {
+      lines.push('', 'Rejoindre la réunion :', meetLink);
+    }
+
+    lines.push(
       '',
       'Merci de confirmer votre présence ou de nous contacter si vous souhaitez reporter.',
       '',
       'Cordialement,',
       "L'équipe 63 Agency",
-    ].join('\n');
+    );
 
     await this.mailer.sendMail({
       to: meeting.contactEmail!,
       subject: 'Rappel : votre rendez-vous avec 63 Agency',
-      text,
+      text: lines.join('\n'),
     });
   }
 }

@@ -58,6 +58,12 @@ export class MeetingsController {
     return this.meetings.create(dto, req.user);
   }
 
+  /** Admin-only: generate Meet links for future meetings missing meet_link. */
+  @Post('backfill-meet-links')
+  backfillMeetLinks(@Req() req: { user: AppUser }) {
+    return this.meetings.backfillMeetLinks(req.user);
+  }
+
   @Patch(':id')
   patch(
     @Param('id') id: string,
@@ -80,5 +86,14 @@ export class MeetingsController {
   ) {
     assertFullAdmin(req.user);
     return this.reminders.sendReminderForMeetingId(id, { force: true });
+  }
+
+  /** Admin-only: regenerate a unique Google Meet link. */
+  @Post(':id/regenerate-meet')
+  regenerateMeet(
+    @Param('id') id: string,
+    @Req() req: { user: AppUser },
+  ) {
+    return this.meetings.regenerateMeetLink(id, req.user);
   }
 }

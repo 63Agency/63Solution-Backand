@@ -19,6 +19,8 @@ export type MeetingRow = {
   reminder_whatsapp_sent: boolean;
   reminder_email_sent: boolean;
   notes: string | null;
+  meet_link: string | null;
+  meet_space: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -35,6 +37,8 @@ export type Meeting = {
   reminderWhatsappSent: boolean;
   reminderEmailSent: boolean;
   notes: string | null;
+  meetLink: string | null;
+  meetSpace: string | null;
   createdAt: string;
   updatedAt: string;
 };

@@ -1,19 +1,23 @@
 const TZ = 'Africa/Casablanca';
 
-/** e.g. "15 août 2026" */
-export function formatMeetingDateFr(iso: string | Date): string {
+/**
+ * Format meeting date + time in Africa/Casablanca (fr).
+ * date → "25 juillet 2026"
+ * time → "15h00"
+ */
+export function formatMeetingDate(iso: string | Date): {
+  date: string;
+  time: string;
+} {
   const d = typeof iso === 'string' ? new Date(iso) : iso;
-  return new Intl.DateTimeFormat('fr-FR', {
+
+  const date = new Intl.DateTimeFormat('fr-FR', {
     timeZone: TZ,
     day: 'numeric',
     month: 'long',
     year: 'numeric',
   }).format(d);
-}
 
-/** e.g. "14h30" */
-export function formatMeetingTimeFr(iso: string | Date): string {
-  const d = typeof iso === 'string' ? new Date(iso) : iso;
   const parts = new Intl.DateTimeFormat('fr-FR', {
     timeZone: TZ,
     hour: '2-digit',
@@ -23,7 +27,29 @@ export function formatMeetingTimeFr(iso: string | Date): string {
 
   const hour = parts.find((p) => p.type === 'hour')?.value ?? '00';
   const minute = parts.find((p) => p.type === 'minute')?.value ?? '00';
-  return `${hour}h${minute}`;
+  const time = `${hour}h${minute}`;
+
+  return { date, time };
+}
+
+/** @deprecated use formatMeetingDate().date */
+export function formatMeetingDateFr(iso: string | Date): string {
+  return formatMeetingDate(iso).date;
+}
+
+/** @deprecated use formatMeetingDate().time */
+export function formatMeetingTimeFr(iso: string | Date): string {
+  return formatMeetingDate(iso).time;
+}
+
+/** True when meeting is in the future and strictly less than `hours` ahead. */
+export function isMeetingWithinHours(
+  iso: string | Date,
+  hours: number,
+): boolean {
+  const d = typeof iso === 'string' ? new Date(iso) : iso;
+  const diffMs = d.getTime() - Date.now();
+  return diffMs >= 0 && diffMs < hours * 60 * 60 * 1000;
 }
 
 export function firstNameOnly(fullName: string): string {
