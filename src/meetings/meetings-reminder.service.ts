@@ -2,6 +2,7 @@ import { forwardRef, Inject, Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { MailerService } from '../common/mailer/mailer.service';
 import { MetaService } from '../whatsapp/meta.service';
+import { GoogleMeetService } from './google-meet.service';
 import { MeetingsService } from './meetings.service';
 import type { Meeting } from './types/meeting.types';
 import {
@@ -18,6 +19,7 @@ export class MeetingsReminderService {
     private readonly meetings: MeetingsService,
     private readonly meta: MetaService,
     private readonly mailer: MailerService,
+    private readonly googleMeet: GoogleMeetService,
   ) {}
 
   /** Every 15 minutes (Nest cron includes seconds). */
@@ -121,30 +123,38 @@ export class MeetingsReminderService {
       Boolean(meeting.contactEmail) &&
       (options.force || !meeting.reminderEmailSent);
 
-    if (shouldWhatsapp && meeting.contactPhone) {
+    // Ensure Meet link once for both channels (WhatsApp requires {{4}}).
+    let current = meeting;
+    if (shouldWhatsapp || shouldEmail) {
+      current = await this.ensureMeetLink(current);
+    }
+
+    if (shouldWhatsapp && current.contactPhone) {
       try {
-        await this.sendWhatsappReminder(meeting);
-        await this.meetings.markReminderFlags(meeting.id, { whatsapp: true });
-        whatsappSent = true;
+        const sent = await this.sendWhatsappReminder(current);
+        if (sent) {
+          await this.meetings.markReminderFlags(current.id, { whatsapp: true });
+          whatsappSent = true;
+        }
       } catch (err) {
         failures += 1;
         const message = err instanceof Error ? err.message : String(err);
         this.logger.warn(
-          `[MeetingsReminder] whatsapp failed id=${meeting.id}: ${message}`,
+          `[MeetingsReminder] whatsapp failed id=${current.id}: ${message}`,
         );
       }
     }
 
-    if (shouldEmail && meeting.contactEmail) {
+    if (shouldEmail && current.contactEmail) {
       try {
-        await this.sendEmailReminder(meeting);
-        await this.meetings.markReminderFlags(meeting.id, { email: true });
+        await this.sendEmailReminder(current);
+        await this.meetings.markReminderFlags(current.id, { email: true });
         emailSent = true;
       } catch (err) {
         failures += 1;
         const message = err instanceof Error ? err.message : String(err);
         this.logger.warn(
-          `[MeetingsReminder] email failed id=${meeting.id}: ${message}`,
+          `[MeetingsReminder] email failed id=${current.id}: ${message}`,
         );
       }
     }
@@ -152,30 +162,57 @@ export class MeetingsReminderService {
     return { whatsappSent, emailSent, failures };
   }
 
-  private async sendWhatsappReminder(meeting: Meeting): Promise<void> {
+  /**
+   * If meet_link is missing, try to create a Google Meet space and persist it.
+   */
+  private async ensureMeetLink(meeting: Meeting): Promise<Meeting> {
+    if (meeting.meetLink?.trim()) {
+      return meeting;
+    }
+
+    const created = await this.googleMeet.createSpace();
+    if (!created?.meetLink) {
+      this.logger.warn(
+        `[MeetingsReminder] meet_link manquant et génération Google Meet échouée id=${meeting.id} — WhatsApp sera ignoré (4e paramètre requis)`,
+      );
+      return meeting;
+    }
+
+    try {
+      return await this.meetings.saveMeetLink(
+        meeting.id,
+        created.meetLink,
+        created.spaceName,
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn(
+        `[MeetingsReminder] impossible de persister meet_link id=${meeting.id}: ${message}`,
+      );
+      // Still use the freshly generated link for this send attempt.
+      return {
+        ...meeting,
+        meetLink: created.meetLink,
+        meetSpace: created.spaceName,
+      };
+    }
+  }
+
+  /**
+   * Always uses meeting_reminder_date with 4 params: nom, date, heure, lien.
+   * Returns false if WhatsApp was skipped (no Meet link).
+   */
+  private async sendWhatsappReminder(meeting: Meeting): Promise<boolean> {
+    const meetLink = meeting.meetLink?.trim() || '';
+    if (!meetLink) {
+      this.logger.warn(
+        `[MeetingsReminder] WhatsApp non envoyé id=${meeting.id} — meet_link absent (Meta exige 4 params, paramètre vide rejeté)`,
+      );
+      return false;
+    }
+
     const prenom = firstNameOnly(meeting.contactName);
     const { date, time } = formatMeetingDate(meeting.meetingDate);
-    const meetLink = meeting.meetLink?.trim() || '';
-
-    if (meetLink) {
-      await this.meta.sendTemplateMessage(
-        meeting.contactPhone!,
-        'meeting_reminder_meet',
-        'fr',
-        [
-          {
-            type: 'body',
-            parameters: [
-              { type: 'text', text: prenom },
-              { type: 'text', text: date },
-              { type: 'text', text: time },
-              { type: 'text', text: meetLink },
-            ],
-          },
-        ],
-      );
-      return;
-    }
 
     await this.meta.sendTemplateMessage(
       meeting.contactPhone!,
@@ -185,13 +222,15 @@ export class MeetingsReminderService {
         {
           type: 'body',
           parameters: [
-            { type: 'text', text: prenom },
-            { type: 'text', text: date },
-            { type: 'text', text: time },
+            { type: 'text', text: prenom }, // {{1}}
+            { type: 'text', text: date }, // {{2}} prévu le …
+            { type: 'text', text: time }, // {{3}} à …
+            { type: 'text', text: meetLink }, // {{4}}
           ],
         },
       ],
     );
+    return true;
   }
 
   private async sendEmailReminder(meeting: Meeting): Promise<void> {

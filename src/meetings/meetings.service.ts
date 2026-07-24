@@ -262,23 +262,18 @@ export class MeetingsService {
     return meeting;
   }
 
-  async regenerateMeetLink(id: string, user: AppUser) {
-    assertFullAdmin(user);
-    await this.findRowOrThrow(id);
-
-    const meet = await this.googleMeet.createSpace();
-    if (!meet) {
-      throw new ConflictException({
-        message: 'Impossible de générer un lien Google Meet.',
-      });
-    }
-
+  /** Persist Meet link/space (used by reminders when link is missing). */
+  async saveMeetLink(
+    id: string,
+    meetLink: string,
+    meetSpace: string,
+  ): Promise<Meeting> {
     const sb = this.supabase.getClient();
     const { data, error } = await sb
       .from('meetings')
       .update({
-        meet_link: meet.meetLink,
-        meet_space: meet.spaceName,
+        meet_link: meetLink,
+        meet_space: meetSpace,
         updated_at: new Date().toISOString(),
       })
       .eq('id', id)
@@ -290,9 +285,23 @@ export class MeetingsService {
         message: error?.message ?? 'Mise à jour du lien Meet impossible',
       });
     }
-
-    this.logger.log(`Meeting meet link regenerated id=${id}`);
     return mapMeetingRow(data as MeetingRow);
+  }
+
+  async regenerateMeetLink(id: string, user: AppUser) {
+    assertFullAdmin(user);
+    await this.findRowOrThrow(id);
+
+    const meet = await this.googleMeet.createSpace();
+    if (!meet) {
+      throw new ConflictException({
+        message: 'Impossible de générer un lien Google Meet.',
+      });
+    }
+
+    const updated = await this.saveMeetLink(id, meet.meetLink, meet.spaceName);
+    this.logger.log(`Meeting meet link regenerated id=${id}`);
+    return updated;
   }
 
   /** Generate Meet links for all future meetings missing meet_link. */
