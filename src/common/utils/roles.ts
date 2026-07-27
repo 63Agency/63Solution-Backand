@@ -1,5 +1,8 @@
 export type ApiRole = 'admin' | 'admin_whatsapp';
-export type AppRoute = '/dashboard' | '/dashboard/conversations';
+export type AppRoute =
+  | '/dashboard'
+  | '/dashboard/conversations'
+  | '/dashboard/leads';
 
 const FULL_ADMIN_ALIASES = new Set(['admin', 'superadmin', 'super_admin']);
 const WHATSAPP_ADMIN_ALIASES = new Set([
@@ -30,9 +33,17 @@ export function isAdminRole(role: string | null | undefined): boolean {
   return isFullAdmin(role);
 }
 
+export function isWhatsappAdmin(role: string | null | undefined): boolean {
+  return normalizeApiRole(role) === 'admin_whatsapp';
+}
+
 export function canAccessWhatsapp(role: string | null | undefined): boolean {
   const r = normalizeApiRole(role);
   return r === 'admin' || r === 'admin_whatsapp';
+}
+
+export function canAccessLeads(role: string | null | undefined): boolean {
+  return canAccessWhatsapp(role);
 }
 
 export function recommendedRoute(

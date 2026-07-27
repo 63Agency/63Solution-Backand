@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { AppController } from './app.controller';
@@ -17,6 +17,8 @@ import { SupabaseModule } from './supabase/supabase.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { UsersModule } from './users/users.module';
 import { WhatsappModule } from './whatsapp/whatsapp.module';
+import { WhatsappAdminAccessInterceptor } from './common/interceptors/whatsapp-admin-access.interceptor';
+import { LeadsModule } from './leads/leads.module';
 
 @Module({
   imports: [
@@ -38,11 +40,16 @@ import { WhatsappModule } from './whatsapp/whatsapp.module';
     UsersModule,
     NotificationsModule,
     WhatsappModule,
+    LeadsModule,
   ],
   controllers: [AppController],
   providers: [
     AppService,
     { provide: APP_GUARD, useClass: ThrottlerGuard },
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: WhatsappAdminAccessInterceptor,
+    },
   ],
 })
 export class AppModule {}

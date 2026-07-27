@@ -9,6 +9,7 @@ import * as bcrypt from 'bcrypt';
 import type { AppUser } from '../auth/types/app-user';
 import { assertFullAdmin } from '../common/utils/access';
 import { isFullAdmin, normalizeApiRole, recommendedRoute } from '../common/utils/roles';
+import { getRolePermissions } from '../common/utils/permissions';
 import {
   mapUserToMe,
   mapUserToTeamItem,
@@ -77,6 +78,7 @@ export class UsersService {
     return {
       user: mapped,
       route: recommendedRoute(mapped.role),
+      permissions: getRolePermissions(mapped.role),
     };
   }
 

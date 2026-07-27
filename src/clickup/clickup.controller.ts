@@ -15,7 +15,7 @@ import { AuthGuard } from '@nestjs/passport';
 import { SkipThrottle } from '@nestjs/throttler';
 import type { Request } from 'express';
 import type { AppUser } from '../auth/types/app-user';
-import { assertFullAdmin } from '../common/utils/access';
+import { assertCanAccessLeads } from '../common/utils/access';
 import { ClickupService } from './clickup.service';
 import { verifyClickUpSignature } from './utils/clickup-signature';
 
@@ -75,7 +75,7 @@ export class ClickupController {
   @UseGuards(AuthGuard('jwt'))
   @HttpCode(HttpStatus.OK)
   async syncAllLeads(@Req() req: { user: AppUser }) {
-    assertFullAdmin(req.user);
+    assertCanAccessLeads(req.user);
     const synced = await this.clickup.syncAllLeads();
     return { ok: true, synced };
   }

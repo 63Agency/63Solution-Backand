@@ -7,6 +7,7 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import { recommendedRoute } from '../common/utils/roles';
+import { getRolePermissions } from '../common/utils/permissions';
 import {
   mapUserToMe,
   USER_PUBLIC_COLUMNS,
@@ -101,6 +102,7 @@ export class AuthService {
       tokenType: 'Bearer' as const,
       user: mapped,
       route: recommendedRoute(mapped.role),
+      permissions: getRolePermissions(mapped.role),
     };
   }
 
@@ -122,6 +124,7 @@ export class AuthService {
     return {
       user: mapped,
       route: recommendedRoute(mapped.role),
+      permissions: getRolePermissions(mapped.role),
     };
   }
 

@@ -2,9 +2,12 @@ import {
   ConflictException,
   Injectable,
   Logger,
+  NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import type { AppUser } from '../auth/types/app-user';
+import { assertCanAccessLeads } from '../common/utils/access';
 import { SupabaseService } from '../supabase/supabase.service';
 import type { ClickUpLead } from './types/clickup.types';
 import { mapClickUpTaskToLead } from './utils/clickup-task-parser';
@@ -341,5 +344,149 @@ export class ClickupService {
 
     const task = await this.resolveTaskFromWebhook(payload);
     return this.saveOrUpdateLead(task, payload);
+  }
+
+  async listLeads(
+    user: AppUser,
+    filters: {
+      status?: string;
+      listId?: string;
+      search?: string;
+      limit?: number;
+      offset?: number;
+    } = {},
+  ): Promise<{ items: ClickUpLead[]; total: number }> {
+    assertCanAccessLeads(user);
+
+    const limit = Math.min(Math.max(filters.limit ?? 50, 1), 200);
+    const offset = Math.max(filters.offset ?? 0, 0);
+    const status = filters.status?.trim();
+    const listId = filters.listId?.trim();
+    const search = filters.search?.trim();
+
+    let query = this.supabase
+      .getClient()
+      .from('clickup_leads')
+      .select('*', { count: 'exact' })
+      .order('updated_at', { ascending: false });
+
+    if (status) query = query.eq('status', status);
+    if (listId) query = query.eq('list_id', listId);
+    if (search) {
+      const term = search.replace(/,/g, ' ').trim();
+      query = query.or(
+        `name.ilike.%${term}%,phone.ilike.%${term}%,email.ilike.%${term}%`,
+      );
+    }
+
+    const { data, error, count } = await query.range(
+      offset,
+      offset + limit - 1,
+    );
+
+    if (error) {
+      throw new ConflictException({ message: error.message });
+    }
+
+    return {
+      items: (data ?? []).map((row) => mapLeadRow(row as LeadRow)),
+      total: count ?? 0,
+    };
+  }
+
+  async getLeadById(user: AppUser, id: string): Promise<{ item: ClickUpLead }> {
+    assertCanAccessLeads(user);
+
+    const leadId = id.trim();
+    if (!leadId) {
+      throw new NotFoundException({ message: 'Lead introuvable.' });
+    }
+
+    const { data, error } = await this.supabase
+      .getClient()
+      .from('clickup_leads')
+      .select('*')
+      .eq('id', leadId)
+      .maybeSingle();
+
+    if (error) {
+      throw new ConflictException({ message: error.message });
+    }
+    if (!data) {
+      throw new NotFoundException({ message: 'Lead introuvable.' });
+    }
+
+    return { item: mapLeadRow(data as LeadRow) };
+  }
+
+  async syncLeadsForUser(
+    user: AppUser,
+  ): Promise<{ ok: true; synced: number }> {
+    assertCanAccessLeads(user);
+    const synced = await this.syncAllLeads();
+    return { ok: true, synced };
+  }
+
+  async getLeadsMeta(user: AppUser): Promise<{
+    statuses: string[];
+    lists: Array<{ id: string; name: string }>;
+  }> {
+    assertCanAccessLeads(user);
+
+    const { data, error } = await this.supabase
+      .getClient()
+      .from('clickup_leads')
+      .select('status, list_id, list_name');
+
+    if (error) {
+      throw new ConflictException({ message: error.message });
+    }
+
+    const statuses = new Set<string>();
+    const listsById = new Map<string, string>();
+
+    for (const row of data ?? []) {
+      const status = row.status ? String(row.status).trim() : '';
+      if (status) statuses.add(status);
+
+      const listId = row.list_id ? String(row.list_id).trim() : '';
+      if (!listId) continue;
+      const listName = row.list_name ? String(row.list_name).trim() : listId;
+      listsById.set(listId, listName);
+    }
+
+    return {
+      statuses: [...statuses].sort((a, b) => a.localeCompare(b, 'fr')),
+      lists: [...listsById.entries()]
+        .map(([id, name]) => ({ id, name }))
+        .sort((a, b) => a.name.localeCompare(b.name, 'fr')),
+    };
+  }
+
+  async getLeadsStats(user: AppUser): Promise<{
+    total: number;
+    byStatus: Record<string, number>;
+  }> {
+    assertCanAccessLeads(user);
+
+    const { data, error } = await this.supabase
+      .getClient()
+      .from('clickup_leads')
+      .select('status');
+
+    if (error) {
+      throw new ConflictException({ message: error.message });
+    }
+
+    const byStatus: Record<string, number> = {};
+    for (const row of data ?? []) {
+      const status = row.status ? String(row.status).trim() : 'Sans statut';
+      byStatus[status] = (byStatus[status] ?? 0) + 1;
+    }
+
+    return {
+      total: data?.length ?? 0,
+      byStatus,
+    };
   }
 }
