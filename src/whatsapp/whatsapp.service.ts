@@ -448,7 +448,7 @@ export class WhatsappService {
             ? 'Vidéo'
             : 'Document');
 
-      const message = await this.persistMessage({
+      const { message } = await this.persistMessage({
         conversationId: conv.id,
         direction: 'outbound',
         body: bodyForStore,
@@ -494,7 +494,7 @@ export class WhatsappService {
     );
 
     const now = new Date().toISOString();
-    const message = await this.persistMessage({
+    const { message } = await this.persistMessage({
       conversationId: conv.id,
       direction: 'outbound',
       body: sent.text,
@@ -891,9 +891,19 @@ export class WhatsappService {
       const from = pickStr(msg, 'from');
       const phone = normalizePhoneNumber(from);
       const type = pickStr(msg, 'type') || 'text';
+      const metaMessageId = pickStr(msg, 'id');
+
+      if (metaMessageId) {
+        const duplicate = await this.findMessageByWamid(metaMessageId);
+        if (duplicate) {
+          this.logger.log(
+            `${prefix} message[${mi}] duplicate wamid=${metaMessageId} — skipped`,
+          );
+          continue;
+        }
+      }
 
       let text = extractMetaMessageBody(msg);
-      const metaMessageId = pickStr(msg, 'id');
       const sentAt =
         parseWebhookTimestamp(pickStr(msg, 'timestamp')) ??
         new Date().toISOString();
@@ -980,15 +990,12 @@ export class WhatsappService {
 
       const contactName = contactNameByWaId.get(from) || null;
 
-      const conv = await this.findOrCreateConversation({
+      const conv = await this.ensureConversation({
         phone,
         contactName,
         watiContactId: from || phone,
         watiConversationId: null,
         source: 'meta',
-        lastMessageText: preview || null,
-        lastMessageAt: sentAt,
-        incrementUnread: true,
       });
 
       if (!metaMessageId && !text && !mediaUrl) {
@@ -1027,7 +1034,7 @@ export class WhatsappService {
         }
       }
 
-      await this.persistMessage({
+      const { created } = await this.persistMessage({
         conversationId: conv.id,
         direction: 'inbound',
         body: text,
@@ -1045,11 +1052,26 @@ export class WhatsappService {
         fileSize,
       });
 
+      if (!created) {
+        this.logger.log(
+          `${prefix} message[${mi}] duplicate race metaId=${metaMessageId ?? '(none)'} — skipped side effects`,
+        );
+        continue;
+      }
+
+      const updatedConv = await this.applyInboundConversationUpdate({
+        conversationId: conv.id,
+        contactName,
+        watiContactId: from || phone,
+        lastMessageText: preview || null,
+        lastMessageAt: sentAt,
+      });
+
       try {
-        await this.notifications.createWhatsappMessageNotification({
+        await this.notifications.upsertWhatsappMessageNotification({
           conversationId: conv.id,
           phoneNumber: phone,
-          contactName: conv.contact_name,
+          contactName: updatedConv.contact_name,
           body: preview,
           messageId: metaMessageId || null,
           createdAt: sentAt,
@@ -1097,6 +1119,151 @@ export class WhatsappService {
     if (error || !data) {
       throw new NotFoundException({ message: 'conversation introuvable' });
     }
+    return data as ConversationRow;
+  }
+
+  private async ensureConversation(input: {
+    phone: string;
+    contactName: string | null;
+    watiContactId: string;
+    watiConversationId: string | null;
+    source: string;
+  }): Promise<ConversationRow> {
+    this.logger.log(
+      `[Supabase conversation] ensure phone=${input.phone} contactName=${input.contactName ?? ''}`,
+    );
+
+    const sb = this.supabase.getClient();
+    const { data: existing, error: findError } = await sb
+      .from('whatsapp_conversations')
+      .select('*')
+      .eq('phone_number', input.phone)
+      .maybeSingle();
+
+    if (findError) {
+      this.logger.error(
+        `[Supabase conversation] find error phone=${input.phone} ${formatSupabaseError(findError)}`,
+      );
+      throw new ConflictException({ message: findError.message });
+    }
+
+    const now = new Date().toISOString();
+
+    if (existing) {
+      const patch: Record<string, unknown> = {
+        updated_at: now,
+      };
+      if (input.contactName) {
+        patch.contact_name = input.contactName;
+      }
+      if (input.watiContactId) {
+        patch.wati_contact_id = input.watiContactId;
+      }
+      if (input.watiConversationId) {
+        patch.wati_conversation_id = input.watiConversationId;
+      }
+
+      const { data, error } = await sb
+        .from('whatsapp_conversations')
+        .update(patch)
+        .eq('id', existing.id)
+        .select('*')
+        .single();
+
+      if (error || !data) {
+        this.logger.error(
+          `[Supabase conversation] ensure update failed id=${existing.id} ${formatSupabaseError(error)}`,
+        );
+        throw new ConflictException({
+          message: error?.message ?? 'update conv',
+        });
+      }
+      return data as ConversationRow;
+    }
+
+    this.logger.log(`[Supabase conversation] creating new phone=${input.phone}`);
+    const { data, error } = await sb
+      .from('whatsapp_conversations')
+      .insert({
+        phone_number: input.phone,
+        contact_name: input.contactName,
+        last_message_text: null,
+        last_message_at: null,
+        unread_count: 0,
+        status: 'open',
+        source: input.source,
+        wati_contact_id: input.watiContactId,
+        wati_conversation_id: input.watiConversationId,
+        created_at: now,
+        updated_at: now,
+      })
+      .select('*')
+      .single();
+
+    if (error || !data) {
+      this.logger.error(
+        `[Supabase conversation] insert failed phone=${input.phone} ${formatSupabaseError(error)}`,
+      );
+      throw new ConflictException({
+        message: error?.message ?? 'création conversation impossible',
+      });
+    }
+    this.logger.log(
+      `[Supabase conversation] created id=${data.id} phone=${data.phone_number}`,
+    );
+    return data as ConversationRow;
+  }
+
+  private async applyInboundConversationUpdate(input: {
+    conversationId: string;
+    contactName: string | null;
+    watiContactId: string;
+    lastMessageText: string | null;
+    lastMessageAt: string;
+  }): Promise<ConversationRow> {
+    const sb = this.supabase.getClient();
+    const { data: existing, error: findError } = await sb
+      .from('whatsapp_conversations')
+      .select('unread_count, contact_name')
+      .eq('id', input.conversationId)
+      .maybeSingle();
+
+    if (findError || !existing) {
+      throw new ConflictException({
+        message: findError?.message ?? 'conversation introuvable',
+      });
+    }
+
+    const now = new Date().toISOString();
+    const unread = Number(existing.unread_count ?? 0);
+    const patch = {
+      contact_name: input.contactName || existing.contact_name,
+      last_message_text: input.lastMessageText,
+      last_message_at: input.lastMessageAt,
+      unread_count: unread + 1,
+      wati_contact_id: input.watiContactId,
+      updated_at: now,
+    };
+
+    const { data, error } = await sb
+      .from('whatsapp_conversations')
+      .update(patch)
+      .eq('id', input.conversationId)
+      .select('*')
+      .single();
+
+    if (error || !data) {
+      this.logger.error(
+        `[Supabase conversation] inbound update failed id=${input.conversationId} ${formatSupabaseError(error)}`,
+      );
+      throw new ConflictException({
+        message: error?.message ?? 'update conv',
+      });
+    }
+
+    this.logger.log(
+      `[Supabase conversation] inbound updated id=${data.id} unread=${data.unread_count} last="${String(data.last_message_text ?? '').slice(0, 80)}"`,
+    );
     return data as ConversationRow;
   }
 
@@ -1298,7 +1465,7 @@ export class WhatsappService {
     mediaUrl?: string | null;
     fileName?: string | null;
     fileSize?: number | null;
-  }): Promise<WhatsappMessage> {
+  }): Promise<{ message: WhatsappMessage; created: boolean }> {
     this.logger.log(
       `[Supabase message] save conversationId=${input.conversationId} direction=${input.direction} metaId=${input.watiMessageId ?? ''} replyTo=${input.replyToWatiMessageId ?? ''} body="${input.body.slice(0, 120)}${input.body.length > 120 ? '…' : ''}"`,
     );
@@ -1332,24 +1499,33 @@ export class WhatsappService {
     if (input.watiMessageId) {
       const { data, error } = await sb
         .from('whatsapp_messages')
-        .upsert(row, { onConflict: 'wati_message_id' })
+        .insert(row)
         .select(MESSAGE_SELECT)
         .single();
+
       if (!error && data) {
         this.logger.log(
-          `[Supabase message] upsert OK id=${data.id} conversationId=${data.conversation_id}`,
+          `[Supabase message] insert OK id=${data.id} conversationId=${data.conversation_id} metaId=${input.watiMessageId}`,
         );
-        return mapMessage(data as MessageRow);
+        return { message: mapMessage(data as MessageRow), created: true };
       }
-      if (error && !error.message.toLowerCase().includes('duplicate')) {
-        this.logger.warn(
-          `[Supabase message] upsert failed metaId=${input.watiMessageId} ${formatSupabaseError(error)} — fallback insert`,
-        );
-      } else if (error) {
-        this.logger.log(
-          `[Supabase message] upsert duplicate metaId=${input.watiMessageId} — fallback insert`,
-        );
+
+      if (error?.code === '23505') {
+        const existing = await this.findMessageByWamid(input.watiMessageId);
+        if (existing) {
+          this.logger.log(
+            `[Supabase message] duplicate metaId=${input.watiMessageId} — returning existing id=${existing.id}`,
+          );
+          return { message: mapMessage(existing), created: false };
+        }
       }
+
+      this.logger.error(
+        `[Supabase message] insert failed conversationId=${input.conversationId} metaId=${input.watiMessageId} ${formatSupabaseError(error)}`,
+      );
+      throw new ConflictException({
+        message: error?.message ?? 'insert message impossible',
+      });
     }
 
     const { data, error } = await sb
@@ -1369,6 +1545,6 @@ export class WhatsappService {
     this.logger.log(
       `[Supabase message] insert OK id=${data.id} conversationId=${data.conversation_id}`,
     );
-    return mapMessage(data as MessageRow);
+    return { message: mapMessage(data as MessageRow), created: true };
   }
 }

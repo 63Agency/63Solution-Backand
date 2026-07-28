@@ -19,6 +19,7 @@ type NotificationRow = {
   href: string;
   read: boolean;
   meta: Record<string, unknown> | null;
+  conversation_id: string | null;
   created_at: string;
 };
 
@@ -26,9 +27,10 @@ function mapNotification(row: NotificationRow): NotificationItem {
   const metaRaw = row.meta ?? {};
   const meta: NotificationMeta = {
     conversationId:
-      typeof metaRaw.conversationId === 'string'
+      row.conversation_id ??
+      (typeof metaRaw.conversationId === 'string'
         ? metaRaw.conversationId
-        : undefined,
+        : undefined),
     phoneNumber:
       typeof metaRaw.phoneNumber === 'string' ? metaRaw.phoneNumber : undefined,
     messageId:
@@ -63,7 +65,9 @@ export class NotificationsService {
         .eq('read', false),
       sb
         .from('notifications')
-        .select('id, type, title, body, href, read, meta, created_at')
+        .select(
+          'id, type, title, body, href, read, meta, conversation_id, created_at',
+        )
         .order('created_at', { ascending: false })
         .limit(take),
     ]);
@@ -87,7 +91,9 @@ export class NotificationsService {
       .from('notifications')
       .update({ read: true })
       .eq('id', id)
-      .select('id, type, title, body, href, read, meta, created_at')
+      .select(
+        'id, type, title, body, href, read, meta, conversation_id, created_at',
+      )
       .maybeSingle();
 
     if (error) {
@@ -114,22 +120,29 @@ export class NotificationsService {
   }
 
   async markReadByConversationId(conversationId: string): Promise<void> {
+    const id = conversationId.trim();
+    if (!id) return;
+
     const { error } = await this.supabase
       .getClient()
       .from('notifications')
       .update({ read: true })
       .eq('read', false)
       .eq('type', 'whatsapp.message')
-      .contains('meta', { conversationId });
+      .eq('conversation_id', id);
 
     if (error) {
       this.logger.warn(
-        `markReadByConversationId failed conversationId=${conversationId}: ${error.message}`,
+        `markReadByConversationId failed conversationId=${id}: ${error.message}`,
       );
     }
   }
 
-  async createWhatsappMessageNotification(input: {
+  /**
+   * Une notification WhatsApp par conversation : upsert (body + createdAt),
+   * pas une nouvelle ligne à chaque webhook.
+   */
+  async upsertWhatsappMessageNotification(input: {
     conversationId: string;
     phoneNumber: string;
     contactName: string | null;
@@ -137,27 +150,81 @@ export class NotificationsService {
     messageId: string | null;
     createdAt: string;
   }): Promise<void> {
+    const conversationId = input.conversationId.trim();
     const title =
       input.contactName?.trim() || input.phoneNumber || 'WhatsApp';
     const body = input.body.trim() || '[message]';
-    const href = `/dashboard/conversations?c=${input.conversationId}`;
+    const href = `/dashboard/conversations?c=${conversationId}`;
     const meta: NotificationMeta = {
-      conversationId: input.conversationId,
+      conversationId,
       phoneNumber: input.phoneNumber,
       ...(input.messageId ? { messageId: input.messageId } : {}),
     };
 
-    const { error } = await this.supabase.getClient().from('notifications').insert({
+    const row = {
       type: 'whatsapp.message',
+      conversation_id: conversationId,
       title,
       body,
       href,
       read: false,
       meta,
       created_at: input.createdAt,
-    });
+    };
+
+    const sb = this.supabase.getClient();
+    const { data: existing, error: findError } = await sb
+      .from('notifications')
+      .select('id')
+      .eq('type', 'whatsapp.message')
+      .eq('conversation_id', conversationId)
+      .maybeSingle();
+
+    if (findError) {
+      throw new ConflictException({ message: findError.message });
+    }
+
+    if (existing?.id) {
+      const { error } = await sb
+        .from('notifications')
+        .update({
+          title,
+          body,
+          href,
+          read: false,
+          meta,
+          created_at: input.createdAt,
+        })
+        .eq('id', existing.id);
+
+      if (error) {
+        throw new ConflictException({ message: error.message });
+      }
+      return;
+    }
+
+    const { error } = await sb.from('notifications').insert(row);
 
     if (error) {
+      if (error.code === '23505') {
+        const { error: retryError } = await sb
+          .from('notifications')
+          .update({
+            title,
+            body,
+            href,
+            read: false,
+            meta,
+            created_at: input.createdAt,
+          })
+          .eq('type', 'whatsapp.message')
+          .eq('conversation_id', conversationId);
+
+        if (retryError) {
+          throw new ConflictException({ message: retryError.message });
+        }
+        return;
+      }
       throw new ConflictException({ message: error.message });
     }
   }
