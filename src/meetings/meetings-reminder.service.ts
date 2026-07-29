@@ -1,14 +1,32 @@
 import { forwardRef, Inject, Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { MailerService } from '../common/mailer/mailer.service';
+import { SupabaseService } from '../supabase/supabase.service';
 import { MetaService } from '../whatsapp/meta.service';
 import { GoogleMeetService } from './google-meet.service';
 import { MeetingsService } from './meetings.service';
-import type { Meeting } from './types/meeting.types';
+import type {
+  Meeting,
+  MeetingReminderRow,
+  MeetingRemindersConfig,
+  ReminderChannel,
+  ReminderJobStatus,
+  ReminderOffset,
+} from './types/meeting.types';
 import {
   firstNameOnly,
   formatMeetingDate,
 } from './utils/meeting-datetime';
+import {
+  computeSendAt,
+  normalizeRemindersConfig,
+  REMINDER_CHANNELS,
+  REMINDER_OFFSETS,
+} from './utils/meeting-reminders';
+
+type DueJob = MeetingReminderRow & {
+  meeting?: Meeting;
+};
 
 @Injectable()
 export class MeetingsReminderService {
@@ -17,47 +35,217 @@ export class MeetingsReminderService {
   constructor(
     @Inject(forwardRef(() => MeetingsService))
     private readonly meetings: MeetingsService,
+    private readonly supabase: SupabaseService,
     private readonly meta: MetaService,
     private readonly mailer: MailerService,
     private readonly googleMeet: GoogleMeetService,
   ) {}
 
-  /** Every 15 minutes (Nest cron includes seconds). */
-  @Cron('0 */15 * * * *')
+  /** Every 5 minutes — process pending reminder jobs. */
+  @Cron('0 */5 * * * *')
   async handleCron(): Promise<void> {
     await this.processDueReminders();
   }
 
   /**
-   * Find scheduled meetings ~24h ahead (NOW+23h … NOW+25h) and send reminders.
-   * Safe to call manually for testing.
+   * Create / refresh up to 6 jobs for a scheduled meeting.
+   * Past offsets or unavailable channels → skipped.
+   * Keeps already-sent jobs intact when rescheduling.
    */
+  async scheduleJobsForMeeting(
+    meeting: Meeting,
+    config?: MeetingRemindersConfig,
+    options: { resetSent?: boolean } = {},
+  ): Promise<void> {
+    const reminders = normalizeRemindersConfig(
+      config ?? meeting.reminders,
+    );
+    const now = Date.now();
+    const sb = this.supabase.getClient();
+    const nowIso = new Date().toISOString();
+
+    if (meeting.status !== 'scheduled') {
+      await this.cancelPendingJobs(meeting.id);
+      return;
+    }
+
+    const existing = await this.listJobsForMeeting(meeting.id);
+    const existingByKey = new Map(
+      existing.map((j) => [`${j.channel}:${j.reminder_offset}`, j]),
+    );
+
+    const rows: Array<Record<string, unknown>> = [];
+
+    for (const channel of REMINDER_CHANNELS) {
+      for (const offset of REMINDER_OFFSETS) {
+        const key = `${channel}:${offset}`;
+        const prev = existingByKey.get(key);
+        const enabled = reminders[channel][offset] === true;
+        const sendAt = computeSendAt(meeting.meetingDate, offset);
+        const hasContact =
+          channel === 'whatsapp'
+            ? Boolean(meeting.contactPhone?.trim())
+            : Boolean(meeting.contactEmail?.trim());
+
+        // Keep already-sent jobs unless date/reminders force a full reset.
+        if (prev && prev.status === 'sent' && !options.resetSent) {
+          continue;
+        }
+
+        let status: ReminderJobStatus = 'pending';
+        let error: string | null = null;
+
+        if (!enabled) {
+          status = 'skipped';
+          error = 'désactivé';
+        } else if (!hasContact) {
+          status = 'skipped';
+          error =
+            channel === 'whatsapp'
+              ? 'pas de téléphone'
+              : 'pas d’email';
+        } else if (sendAt.getTime() <= now) {
+          status = 'skipped';
+          error = 'send_at dans le passé';
+        }
+
+        rows.push({
+          meeting_id: meeting.id,
+          channel,
+          reminder_offset: offset,
+          enabled,
+          send_at: sendAt.toISOString(),
+          status,
+          sent_at: null,
+          error,
+          updated_at: nowIso,
+          ...(prev ? {} : { created_at: nowIso }),
+        });
+      }
+    }
+
+    if (rows.length === 0) return;
+
+    const { error } = await sb.from('meeting_reminders').upsert(rows, {
+      onConflict: 'meeting_id,channel,reminder_offset',
+    });
+
+    if (error) {
+      this.logger.error(
+        `[MeetingsReminder] schedule failed meetingId=${meeting.id}: ${error.message}`,
+      );
+      throw error;
+    }
+
+    this.logger.log(
+      `[MeetingsReminder] scheduled meetingId=${meeting.id} jobs=${rows.length} resetSent=${options.resetSent === true}`,
+    );
+  }
+
+  async cancelPendingJobs(meetingId: string): Promise<void> {
+    const { error } = await this.supabase
+      .getClient()
+      .from('meeting_reminders')
+      .update({
+        status: 'skipped',
+        error: 'meeting annulé / terminé',
+        updated_at: new Date().toISOString(),
+      })
+      .eq('meeting_id', meetingId)
+      .eq('status', 'pending');
+
+    if (error) {
+      this.logger.warn(
+        `[MeetingsReminder] cancelPending failed meetingId=${meetingId}: ${error.message}`,
+      );
+    }
+  }
+
+  async listJobsForMeeting(meetingId: string): Promise<MeetingReminderRow[]> {
+    const { data, error } = await this.supabase
+      .getClient()
+      .from('meeting_reminders')
+      .select(
+        'id, meeting_id, channel, reminder_offset, enabled, send_at, status, sent_at, error',
+      )
+      .eq('meeting_id', meetingId);
+
+    if (error) {
+      this.logger.warn(
+        `[MeetingsReminder] listJobs failed meetingId=${meetingId}: ${error.message}`,
+      );
+      return [];
+    }
+    return (data ?? []) as MeetingReminderRow[];
+  }
+
+  async listJobsForMeetings(
+    meetingIds: string[],
+  ): Promise<Map<string, MeetingReminderRow[]>> {
+    const map = new Map<string, MeetingReminderRow[]>();
+    if (meetingIds.length === 0) return map;
+
+    const { data, error } = await this.supabase
+      .getClient()
+      .from('meeting_reminders')
+      .select(
+        'id, meeting_id, channel, reminder_offset, enabled, send_at, status, sent_at, error',
+      )
+      .in('meeting_id', meetingIds);
+
+    if (error) {
+      this.logger.warn(
+        `[MeetingsReminder] listJobsForMeetings failed: ${error.message}`,
+      );
+      return map;
+    }
+
+    for (const row of (data ?? []) as MeetingReminderRow[]) {
+      const list = map.get(row.meeting_id) ?? [];
+      list.push(row);
+      map.set(row.meeting_id, list);
+    }
+    return map;
+  }
+
   async processDueReminders(): Promise<{
     found: number;
     sentWhatsapp: number;
     sentEmail: number;
     failed: number;
   }> {
-    const now = Date.now();
-    const windowStart = new Date(now + 23 * 60 * 60 * 1000);
-    const windowEnd = new Date(now + 25 * 60 * 60 * 1000);
-
     let found = 0;
     let sentWhatsapp = 0;
     let sentEmail = 0;
     let failed = 0;
 
     try {
-      const due = await this.meetings.findDueForReminder(windowStart, windowEnd);
-      found = due.length;
+      const nowIso = new Date().toISOString();
+      const { data, error } = await this.supabase
+        .getClient()
+        .from('meeting_reminders')
+        .select(
+          'id, meeting_id, channel, reminder_offset, enabled, send_at, status, sent_at, error',
+        )
+        .eq('status', 'pending')
+        .lte('send_at', nowIso)
+        .order('send_at', { ascending: true })
+        .limit(100);
 
-      for (const meeting of due) {
-        const result = await this.sendRemindersForMeeting(meeting, {
-          force: false,
-        });
-        sentWhatsapp += result.whatsappSent ? 1 : 0;
-        sentEmail += result.emailSent ? 1 : 0;
-        failed += result.failures;
+      if (error) {
+        throw new Error(error.message);
+      }
+
+      const jobs = (data ?? []) as MeetingReminderRow[];
+      found = jobs.length;
+
+      for (const job of jobs) {
+        const result = await this.executeJob(job, { force: false });
+        if (result.sent) {
+          if (job.channel === 'whatsapp') sentWhatsapp += 1;
+          else sentEmail += 1;
+        }
+        if (result.failed) failed += 1;
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -66,19 +254,24 @@ export class MeetingsReminderService {
     }
 
     this.logger.log(
-      `[MeetingsReminder] found=${found} sent_whatsapp=${sentWhatsapp} sent_email=${sentEmail} failed=${failed}`,
+      `[MeetingsReminder] due found=${found} sent_whatsapp=${sentWhatsapp} sent_email=${sentEmail} failed=${failed}`,
     );
 
     return { found, sentWhatsapp, sentEmail, failed };
   }
 
   /**
-   * Force-send reminder channels for one meeting (admin test endpoint).
-   * Respects already-sent flags unless force=true.
+   * Envoi manuel immédiat (bouton admin) — indépendant du scheduler.
+   * N'altère JAMAIS les jobs auto (remindersStatus reste pending/sent selon le cron).
+   * Avec channel (et offset optionnel) → ce canal seul ; sans body → tous les canaux dispo.
    */
   async sendReminderForMeetingId(
     id: string,
-    options: { force?: boolean } = {},
+    options: {
+      force?: boolean;
+      channel?: ReminderChannel;
+      offset?: ReminderOffset;
+    } = {},
   ): Promise<{
     whatsappSent: boolean;
     emailSent: boolean;
@@ -86,75 +279,93 @@ export class MeetingsReminderService {
     meeting: Meeting;
   }> {
     const meeting = await this.meetings.findById(id);
-    const result = await this.sendRemindersForMeeting(meeting, {
-      force: options.force === true,
+    let whatsappSent = false;
+    let emailSent = false;
+    let failures = 0;
+
+    if (meeting.status !== 'scheduled') {
+      return {
+        whatsappSent,
+        emailSent,
+        failures,
+        meeting,
+      };
+    }
+
+    const wantWhatsapp =
+      !options.channel || options.channel === 'whatsapp';
+    const wantEmail = !options.channel || options.channel === 'email';
+
+    const result = await this.sendManualChannelsNow(meeting, {
+      whatsapp: wantWhatsapp,
+      email: wantEmail,
     });
+    whatsappSent = result.whatsappSent;
+    emailSent = result.emailSent;
+    failures = result.failures;
+
+    if (whatsappSent || emailSent) {
+      await this.meetings.markManualReminderSent(meeting.id, {
+        whatsapp: whatsappSent,
+        email: emailSent,
+      });
+    }
 
     this.logger.log(
-      `[MeetingsReminder] manual id=${id} whatsapp=${result.whatsappSent} email=${result.emailSent} failed=${result.failures}`,
+      `[MeetingsReminder] manual id=${id} whatsapp=${whatsappSent} email=${emailSent} failed=${failures} offset=${options.offset ?? '(none)'} — jobs auto inchangés`,
     );
 
     return {
-      ...result,
+      whatsappSent,
+      emailSent,
+      failures,
       meeting: await this.meetings.findById(id),
     };
   }
 
-  private async sendRemindersForMeeting(
+  /** Envoi immédiat sans toucher meeting_reminders. */
+  private async sendManualChannelsNow(
     meeting: Meeting,
-    options: { force: boolean },
+    channels: { whatsapp: boolean; email: boolean },
   ): Promise<{ whatsappSent: boolean; emailSent: boolean; failures: number }> {
     let whatsappSent = false;
     let emailSent = false;
     let failures = 0;
 
-    // Never remind cancelled / done / no_show meetings.
-    if (meeting.status !== 'scheduled') {
-      this.logger.log(
-        `[MeetingsReminder] skip id=${meeting.id} status=${meeting.status}`,
-      );
-      return { whatsappSent, emailSent, failures };
-    }
-
-    const shouldWhatsapp =
-      Boolean(meeting.contactPhone) &&
-      (options.force || !meeting.reminderWhatsappSent);
-    const shouldEmail =
-      Boolean(meeting.contactEmail) &&
-      (options.force || !meeting.reminderEmailSent);
-
-    // Ensure Meet link once for both channels (WhatsApp requires {{4}}).
     let current = meeting;
-    if (shouldWhatsapp || shouldEmail) {
+    if (
+      (channels.whatsapp && meeting.contactPhone) ||
+      (channels.email && meeting.contactEmail)
+    ) {
       current = await this.ensureMeetLink(current);
     }
 
-    if (shouldWhatsapp && current.contactPhone) {
+    if (channels.whatsapp && current.contactPhone) {
       try {
         const sent = await this.sendWhatsappReminder(current);
         if (sent) {
-          await this.meetings.markReminderFlags(current.id, { whatsapp: true });
           whatsappSent = true;
+        } else {
+          failures += 1;
         }
       } catch (err) {
         failures += 1;
         const message = err instanceof Error ? err.message : String(err);
         this.logger.warn(
-          `[MeetingsReminder] whatsapp failed id=${current.id}: ${message}`,
+          `[MeetingsReminder] manual whatsapp failed id=${current.id}: ${message}`,
         );
       }
     }
 
-    if (shouldEmail && current.contactEmail) {
+    if (channels.email && current.contactEmail) {
       try {
         await this.sendEmailReminder(current);
-        await this.meetings.markReminderFlags(current.id, { email: true });
         emailSent = true;
       } catch (err) {
         failures += 1;
         const message = err instanceof Error ? err.message : String(err);
         this.logger.warn(
-          `[MeetingsReminder] email failed id=${current.id}: ${message}`,
+          `[MeetingsReminder] manual email failed id=${current.id}: ${message}`,
         );
       }
     }
@@ -162,9 +373,118 @@ export class MeetingsReminderService {
     return { whatsappSent, emailSent, failures };
   }
 
-  /**
-   * If meet_link is missing, try to create a Google Meet space and persist it.
-   */
+  private async executeJob(
+    job: DueJob,
+    options: { force: boolean },
+  ): Promise<{ sent: boolean; failed: boolean }> {
+    if (!options.force && job.status === 'sent') {
+      return { sent: false, failed: false };
+    }
+    if (!options.force && job.status !== 'pending' && job.status !== 'failed') {
+      return { sent: false, failed: false };
+    }
+
+    let meeting: Meeting;
+    try {
+      meeting = await this.meetings.findById(job.meeting_id);
+    } catch {
+      await this.markJob(job.id, {
+        status: 'skipped',
+        error: 'meeting introuvable',
+      });
+      return { sent: false, failed: false };
+    }
+
+    if (meeting.status !== 'scheduled') {
+      await this.markJob(job.id, {
+        status: 'skipped',
+        error: `status=${meeting.status}`,
+      });
+      return { sent: false, failed: false };
+    }
+
+    const channel = job.channel as ReminderChannel;
+    meeting = await this.ensureMeetLink(meeting);
+
+    try {
+      if (channel === 'whatsapp') {
+        if (!meeting.contactPhone?.trim()) {
+          await this.markJob(job.id, {
+            status: 'skipped',
+            error: 'pas de téléphone',
+          });
+          return { sent: false, failed: false };
+        }
+        const sent = await this.sendWhatsappReminder(meeting);
+        if (!sent) {
+          await this.markJob(job.id, {
+            status: 'failed',
+            error: 'meet_link absent',
+          });
+          return { sent: false, failed: true };
+        }
+      } else {
+        if (!meeting.contactEmail?.trim()) {
+          await this.markJob(job.id, {
+            status: 'skipped',
+            error: 'pas d’email',
+          });
+          return { sent: false, failed: false };
+        }
+        await this.sendEmailReminder(meeting);
+      }
+
+      await this.markJob(job.id, {
+        status: 'sent',
+        sentAt: new Date().toISOString(),
+        error: null,
+      });
+      await this.meetings.syncLegacyReminderFlags(meeting.id);
+      return { sent: true, failed: false };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn(
+        `[MeetingsReminder] job failed id=${job.id} channel=${channel} offset=${job.reminder_offset}: ${message}`,
+      );
+      await this.markJob(job.id, {
+        status: 'failed',
+        error: message.slice(0, 500),
+      });
+      return { sent: false, failed: true };
+    }
+  }
+
+  private async markJob(
+    jobId: string,
+    patch: {
+      status: ReminderJobStatus;
+      sentAt?: string | null;
+      error?: string | null;
+    },
+  ): Promise<void> {
+    const update: Record<string, unknown> = {
+      status: patch.status,
+      updated_at: new Date().toISOString(),
+    };
+    if (patch.sentAt !== undefined) update.sent_at = patch.sentAt;
+    if (patch.status === 'sent' && patch.sentAt === undefined) {
+      update.sent_at = new Date().toISOString();
+    }
+    if (patch.error !== undefined) update.error = patch.error;
+
+    const { error } = await this.supabase
+      .getClient()
+      .from('meeting_reminders')
+      .update(update)
+      .eq('id', jobId);
+
+    if (error) {
+      this.logger.warn(
+        `[MeetingsReminder] markJob failed id=${jobId}: ${error.message}`,
+      );
+    }
+  }
+
   private async ensureMeetLink(meeting: Meeting): Promise<Meeting> {
     if (meeting.meetLink?.trim()) {
       return meeting;
@@ -173,7 +493,7 @@ export class MeetingsReminderService {
     const created = await this.googleMeet.createSpace();
     if (!created?.meetLink) {
       this.logger.warn(
-        `[MeetingsReminder] meet_link manquant et génération Google Meet échouée id=${meeting.id} — WhatsApp sera ignoré (4e paramètre requis)`,
+        `[MeetingsReminder] meet_link manquant et génération Google Meet échouée id=${meeting.id}`,
       );
       return meeting;
     }
@@ -189,7 +509,6 @@ export class MeetingsReminderService {
       this.logger.warn(
         `[MeetingsReminder] impossible de persister meet_link id=${meeting.id}: ${message}`,
       );
-      // Still use the freshly generated link for this send attempt.
       return {
         ...meeting,
         meetLink: created.meetLink,
@@ -198,15 +517,11 @@ export class MeetingsReminderService {
     }
   }
 
-  /**
-   * Always uses meeting_reminder_date with 4 params: nom, date, heure, lien.
-   * Returns false if WhatsApp was skipped (no Meet link).
-   */
   private async sendWhatsappReminder(meeting: Meeting): Promise<boolean> {
     const meetLink = meeting.meetLink?.trim() || '';
     if (!meetLink) {
       this.logger.warn(
-        `[MeetingsReminder] WhatsApp non envoyé id=${meeting.id} — meet_link absent (Meta exige 4 params, paramètre vide rejeté)`,
+        `[MeetingsReminder] WhatsApp non envoyé id=${meeting.id} — meet_link absent`,
       );
       return false;
     }
@@ -222,10 +537,10 @@ export class MeetingsReminderService {
         {
           type: 'body',
           parameters: [
-            { type: 'text', text: prenom }, // {{1}}
-            { type: 'text', text: date }, // {{2}} prévu le …
-            { type: 'text', text: time }, // {{3}} à …
-            { type: 'text', text: meetLink }, // {{4}}
+            { type: 'text', text: prenom },
+            { type: 'text', text: date },
+            { type: 'text', text: time },
+            { type: 'text', text: meetLink },
           ],
         },
       ],

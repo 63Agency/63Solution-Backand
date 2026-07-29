@@ -8,29 +8,51 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import type { AppUser } from '../auth/types/app-user';
-import { assertFullAdmin } from '../common/utils/access';
+import { assertCanAccessMeetings, assertFullAdmin } from '../common/utils/access';
 import { SupabaseService } from '../supabase/supabase.service';
 import type { CreateMeetingDto } from './dto/create-meeting.dto';
 import type { ListMeetingsQueryDto } from './dto/list-meetings-query.dto';
 import type { UpdateMeetingDto } from './dto/update-meeting.dto';
 import { GoogleMeetService } from './google-meet.service';
 import { MeetingsReminderService } from './meetings-reminder.service';
-import type { Meeting, MeetingRow, MeetingStatus } from './types/meeting.types';
+import type {
+  Meeting,
+  MeetingReminderRow,
+  MeetingRemindersConfig,
+  MeetingRow,
+  MeetingStatus,
+} from './types/meeting.types';
 import {
   casablancaDayBounds,
   casablancaWeekBounds,
-  isMeetingWithinHours,
 } from './utils/meeting-datetime';
 import { normalizeMeetingPhone } from './utils/meeting-phone';
+import {
+  buildRemindersStatusFromJobs,
+  emptyRemindersStatus,
+  legacyFlagsFromStatus,
+  normalizeRemindersConfig,
+} from './utils/meeting-reminders';
 
-/** Only these statuses receive reminders / are treated as active. */
 const ACTIVE_REMINDER_STATUSES: MeetingStatus[] = ['scheduled'];
 
 function clean(value: string | undefined | null): string {
   return (value ?? '').trim();
 }
 
-function mapMeetingRow(r: MeetingRow): Meeting {
+function mapMeetingBase(
+  r: MeetingRow,
+  jobs: MeetingReminderRow[] = [],
+): Meeting {
+  const reminders = normalizeRemindersConfig(
+    (r.reminders as MeetingRemindersConfig | null) ?? undefined,
+  );
+  const remindersStatus =
+    jobs.length > 0
+      ? buildRemindersStatusFromJobs(jobs, reminders)
+      : emptyRemindersStatus();
+  const legacy = legacyFlagsFromStatus(remindersStatus);
+
   return {
     id: String(r.id),
     leadId: r.lead_id ? String(r.lead_id) : null,
@@ -40,8 +62,17 @@ function mapMeetingRow(r: MeetingRow): Meeting {
     contactPhone: r.contact_phone ? String(r.contact_phone) : null,
     contactEmail: r.contact_email ? String(r.contact_email) : null,
     status: String(r.status ?? 'scheduled') as MeetingStatus,
-    reminderWhatsappSent: Boolean(r.reminder_whatsapp_sent),
-    reminderEmailSent: Boolean(r.reminder_email_sent),
+    reminderWhatsappSent:
+      legacy.reminderWhatsappSent || Boolean(r.reminder_whatsapp_sent),
+    reminderEmailSent:
+      legacy.reminderEmailSent || Boolean(r.reminder_email_sent),
+    reminders,
+    remindersStatus,
+    manualReminderSentAt: r.manual_reminder_sent_at
+      ? String(r.manual_reminder_sent_at)
+      : null,
+    manualReminderWhatsappSent: Boolean(r.manual_reminder_whatsapp_sent),
+    manualReminderEmailSent: Boolean(r.manual_reminder_email_sent),
     notes: r.notes != null ? String(r.notes) : null,
     meetLink: r.meet_link ? String(r.meet_link) : null,
     meetSpace: r.meet_space ? String(r.meet_space) : null,
@@ -51,7 +82,7 @@ function mapMeetingRow(r: MeetingRow): Meeting {
 }
 
 const SELECT_COLS =
-  'id, lead_id, title, meeting_date, contact_name, contact_phone, contact_email, status, reminder_whatsapp_sent, reminder_email_sent, notes, meet_link, meet_space, created_at, updated_at';
+  'id, lead_id, title, meeting_date, contact_name, contact_phone, contact_email, status, reminder_whatsapp_sent, reminder_email_sent, reminders, manual_reminder_sent_at, manual_reminder_whatsapp_sent, manual_reminder_email_sent, notes, meet_link, meet_space, created_at, updated_at';
 
 @Injectable()
 export class MeetingsService {
@@ -61,11 +92,23 @@ export class MeetingsService {
     private readonly supabase: SupabaseService,
     private readonly googleMeet: GoogleMeetService,
     @Inject(forwardRef(() => MeetingsReminderService))
-    private readonly reminders: MeetingsReminderService,
+    private readonly reminderJobs: MeetingsReminderService,
   ) {}
 
+  private async enrich(row: MeetingRow): Promise<Meeting> {
+    const jobs = await this.reminderJobs.listJobsForMeeting(row.id);
+    return mapMeetingBase(row, jobs);
+  }
+
+  private async enrichMany(rows: MeetingRow[]): Promise<Meeting[]> {
+    const jobsMap = await this.reminderJobs.listJobsForMeetings(
+      rows.map((r) => r.id),
+    );
+    return rows.map((r) => mapMeetingBase(r, jobsMap.get(r.id) ?? []));
+  }
+
   async list(query: ListMeetingsQueryDto, user: AppUser) {
-    assertFullAdmin(user);
+    assertCanAccessMeetings(user);
     const sb = this.supabase.getClient();
     let q = sb.from('meetings').select(SELECT_COLS);
 
@@ -85,12 +128,12 @@ export class MeetingsService {
     }
 
     return {
-      items: ((data ?? []) as MeetingRow[]).map(mapMeetingRow),
+      items: await this.enrichMany((data ?? []) as MeetingRow[]),
     };
   }
 
   async upcoming(user: AppUser) {
-    assertFullAdmin(user);
+    assertCanAccessMeetings(user);
     const now = new Date();
     const to = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
 
@@ -108,12 +151,12 @@ export class MeetingsService {
     }
 
     return {
-      items: ((data ?? []) as MeetingRow[]).map(mapMeetingRow),
+      items: await this.enrichMany((data ?? []) as MeetingRow[]),
     };
   }
 
   async today(user: AppUser) {
-    assertFullAdmin(user);
+    assertCanAccessMeetings(user);
     const { startIso, endIso } = casablancaDayBounds();
 
     const sb = this.supabase.getClient();
@@ -129,12 +172,12 @@ export class MeetingsService {
     }
 
     return {
-      items: ((data ?? []) as MeetingRow[]).map(mapMeetingRow),
+      items: await this.enrichMany((data ?? []) as MeetingRow[]),
     };
   }
 
   async stats(user: AppUser) {
-    assertFullAdmin(user);
+    assertCanAccessMeetings(user);
     const sb = this.supabase.getClient();
     const { startIso: todayStart, endIso: todayEnd } = casablancaDayBounds();
     const { startIso: weekStart, endIso: weekEnd } = casablancaWeekBounds();
@@ -175,7 +218,7 @@ export class MeetingsService {
   }
 
   async create(dto: CreateMeetingDto, user: AppUser) {
-    assertFullAdmin(user);
+    assertCanAccessMeetings(user);
 
     const title = clean(dto.title);
     const contactName = clean(dto.contactName);
@@ -185,6 +228,7 @@ export class MeetingsService {
     const notes = clean(dto.notes) || null;
     const leadId = dto.leadId?.trim() || null;
     const status = (dto.status?.trim() || 'scheduled') as MeetingStatus;
+    const reminders = normalizeRemindersConfig(dto.reminders);
 
     if (!title) {
       throw new BadRequestException({ message: 'title requis' });
@@ -219,8 +263,12 @@ export class MeetingsService {
         notes,
         meet_link: meet?.meetLink ?? null,
         meet_space: meet?.spaceName ?? null,
+        reminders,
         reminder_whatsapp_sent: false,
         reminder_email_sent: false,
+        manual_reminder_sent_at: null,
+        manual_reminder_whatsapp_sent: false,
+        manual_reminder_email_sent: false,
         created_at: now,
         updated_at: now,
       })
@@ -233,25 +281,16 @@ export class MeetingsService {
       });
     }
 
-    let meeting = mapMeetingRow(data as MeetingRow);
+    let meeting = mapMeetingBase(data as MeetingRow);
 
-    // Meeting < 24h away: cron window will never catch it → remind now.
-    if (
-      ACTIVE_REMINDER_STATUSES.includes(meeting.status) &&
-      isMeetingWithinHours(meeting.meetingDate, 24)
-    ) {
-      this.logger.log(
-        `Meeting id=${meeting.id} within 24h — sending reminder immediately`,
-      );
+    if (ACTIVE_REMINDER_STATUSES.includes(meeting.status)) {
       try {
-        await this.reminders.sendReminderForMeetingId(meeting.id, {
-          force: false,
-        });
-        meeting = await this.findById(meeting.id);
+        await this.reminderJobs.scheduleJobsForMeeting(meeting, reminders);
+        meeting = await this.enrich(data as MeetingRow);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         this.logger.warn(
-          `Immediate reminder failed id=${meeting.id}: ${message}`,
+          `Schedule reminders failed id=${meeting.id}: ${message}`,
         );
       }
     }
@@ -262,7 +301,6 @@ export class MeetingsService {
     return meeting;
   }
 
-  /** Persist Meet link/space (used by reminders when link is missing). */
   async saveMeetLink(
     id: string,
     meetLink: string,
@@ -285,7 +323,7 @@ export class MeetingsService {
         message: error?.message ?? 'Mise à jour du lien Meet impossible',
       });
     }
-    return mapMeetingRow(data as MeetingRow);
+    return this.enrich(data as MeetingRow);
   }
 
   async regenerateMeetLink(id: string, user: AppUser) {
@@ -304,7 +342,6 @@ export class MeetingsService {
     return updated;
   }
 
-  /** Generate Meet links for all future meetings missing meet_link. */
   async backfillMeetLinks(user: AppUser) {
     assertFullAdmin(user);
     const nowIso = new Date().toISOString();
@@ -364,12 +401,15 @@ export class MeetingsService {
   }
 
   async update(id: string, dto: UpdateMeetingDto, user: AppUser) {
-    assertFullAdmin(user);
+    assertCanAccessMeetings(user);
     const existing = await this.findRowOrThrow(id);
 
     const patch: Record<string, unknown> = {
       updated_at: new Date().toISOString(),
     };
+
+    let rescheduleJobs = false;
+    let resetSentJobs = false;
 
     if (dto.title !== undefined) {
       const title = clean(dto.title);
@@ -386,10 +426,14 @@ export class MeetingsService {
       const nextIso = new Date(dto.meetingDate).toISOString();
       patch.meeting_date = nextIso;
 
-      // Reschedule → allow a fresh reminder for the new slot.
       if (nextIso !== existing.meeting_date) {
         patch.reminder_whatsapp_sent = false;
         patch.reminder_email_sent = false;
+        patch.manual_reminder_sent_at = null;
+        patch.manual_reminder_whatsapp_sent = false;
+        patch.manual_reminder_email_sent = false;
+        rescheduleJobs = true;
+        resetSentJobs = true;
       }
     }
 
@@ -406,6 +450,7 @@ export class MeetingsService {
         dto.contactPhone === null || dto.contactPhone === ''
           ? null
           : normalizeMeetingPhone(dto.contactPhone);
+      rescheduleJobs = true;
     }
 
     if (dto.contactEmail !== undefined) {
@@ -413,6 +458,7 @@ export class MeetingsService {
         dto.contactEmail === null || dto.contactEmail === ''
           ? null
           : clean(dto.contactEmail).toLowerCase() || null;
+      rescheduleJobs = true;
     }
 
     if (dto.leadId !== undefined) {
@@ -421,11 +467,19 @@ export class MeetingsService {
 
     if (dto.status !== undefined) {
       patch.status = dto.status;
+      if (dto.status !== existing.status) {
+        rescheduleJobs = true;
+      }
     }
 
     if (dto.notes !== undefined) {
       patch.notes =
         dto.notes === null ? null : clean(dto.notes) || null;
+    }
+
+    if (dto.reminders !== undefined) {
+      patch.reminders = normalizeRemindersConfig(dto.reminders);
+      rescheduleJobs = true;
     }
 
     const nextPhone =
@@ -457,28 +511,26 @@ export class MeetingsService {
       });
     }
 
-    let meeting = mapMeetingRow(data as MeetingRow);
+    let meeting = mapMeetingBase(data as MeetingRow);
 
-    // If rescheduled within 24h, remind immediately (same gap as create).
-    if (
-      patch.meeting_date !== undefined &&
-      ACTIVE_REMINDER_STATUSES.includes(meeting.status) &&
-      isMeetingWithinHours(meeting.meetingDate, 24)
-    ) {
-      this.logger.log(
-        `Meeting id=${meeting.id} rescheduled within 24h — sending reminder immediately`,
-      );
+    if (rescheduleJobs) {
       try {
-        await this.reminders.sendReminderForMeetingId(meeting.id, {
-          force: false,
-        });
-        meeting = await this.findById(meeting.id);
+        if (ACTIVE_REMINDER_STATUSES.includes(meeting.status)) {
+          await this.reminderJobs.scheduleJobsForMeeting(meeting, undefined, {
+            resetSent: resetSentJobs,
+          });
+        } else {
+          await this.reminderJobs.cancelPendingJobs(meeting.id);
+        }
+        meeting = await this.enrich(data as MeetingRow);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         this.logger.warn(
-          `Immediate reminder after reschedule failed id=${meeting.id}: ${message}`,
+          `Reschedule reminders failed id=${meeting.id}: ${message}`,
         );
       }
+    } else {
+      meeting = await this.enrich(data as MeetingRow);
     }
 
     this.logger.log(`Meeting updated id=${id}`);
@@ -486,7 +538,7 @@ export class MeetingsService {
   }
 
   async remove(id: string, user: AppUser) {
-    assertFullAdmin(user);
+    assertCanAccessMeetings(user);
     await this.findRowOrThrow(id);
 
     const sb = this.supabase.getClient();
@@ -500,41 +552,75 @@ export class MeetingsService {
   }
 
   async findById(id: string): Promise<Meeting> {
-    return mapMeetingRow(await this.findRowOrThrow(id));
+    return this.enrich(await this.findRowOrThrow(id));
   }
 
-  async markReminderFlags(
+  /**
+   * Envoi manuel : met à jour les flags legacy + champs manual_*
+   * sans toucher aux jobs auto (remindersStatus).
+   */
+  async markManualReminderSent(
     id: string,
-    flags: { whatsapp?: boolean; email?: boolean },
+    channels: { whatsapp?: boolean; email?: boolean },
   ): Promise<void> {
+    const now = new Date().toISOString();
+    const patch: Record<string, unknown> = {
+      updated_at: now,
+      manual_reminder_sent_at: now,
+    };
+    if (channels.whatsapp === true) {
+      patch.manual_reminder_whatsapp_sent = true;
+      patch.reminder_whatsapp_sent = true;
+    }
+    if (channels.email === true) {
+      patch.manual_reminder_email_sent = true;
+      patch.reminder_email_sent = true;
+    }
+
+    const { error } = await this.supabase
+      .getClient()
+      .from('meetings')
+      .update(patch)
+      .eq('id', id);
+
+    if (error) {
+      this.logger.warn(
+        `markManualReminderSent failed id=${id}: ${error.message}`,
+      );
+    }
+  }
+
+  /** Sync legacy booleans from job statuses (at least one `sent` per channel). */
+  async syncLegacyReminderFlags(id: string): Promise<void> {
+    const jobs = await this.reminderJobs.listJobsForMeeting(id);
+    const reminders = normalizeRemindersConfig(undefined);
+    const status = buildRemindersStatusFromJobs(jobs, reminders);
+    const flags = legacyFlagsFromStatus(status);
+
     const patch: Record<string, unknown> = {
       updated_at: new Date().toISOString(),
     };
-    if (flags.whatsapp === true) patch.reminder_whatsapp_sent = true;
-    if (flags.email === true) patch.reminder_email_sent = true;
+    if (flags.reminderWhatsappSent) patch.reminder_whatsapp_sent = true;
+    if (flags.reminderEmailSent) patch.reminder_email_sent = true;
 
-    const sb = this.supabase.getClient();
-    const { error } = await sb.from('meetings').update(patch).eq('id', id);
-    if (error) {
-      throw new ConflictException({ message: error.message });
+    if (
+      patch.reminder_whatsapp_sent === undefined &&
+      patch.reminder_email_sent === undefined
+    ) {
+      return;
     }
-  }
 
-  async findDueForReminder(windowStart: Date, windowEnd: Date): Promise<Meeting[]> {
-    const sb = this.supabase.getClient();
-    const { data, error } = await sb
+    const { error } = await this.supabase
+      .getClient()
       .from('meetings')
-      .select(SELECT_COLS)
-      .in('status', ACTIVE_REMINDER_STATUSES)
-      .gte('meeting_date', windowStart.toISOString())
-      .lte('meeting_date', windowEnd.toISOString())
-      .order('meeting_date', { ascending: true });
+      .update(patch)
+      .eq('id', id);
 
     if (error) {
-      throw new ConflictException({ message: error.message });
+      this.logger.warn(
+        `syncLegacyReminderFlags failed id=${id}: ${error.message}`,
+      );
     }
-
-    return ((data ?? []) as MeetingRow[]).map(mapMeetingRow);
   }
 
   private async findRowOrThrow(id: string): Promise<MeetingRow> {

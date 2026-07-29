@@ -34,7 +34,12 @@ const FULL_LEADS_PERMISSIONS: LeadsPermissions = {
 };
 
 const FULL_ADMIN_PERMISSIONS: RolePermissions = {
-  pages: ['/dashboard', '/dashboard/conversations', '/dashboard/leads'],
+  pages: [
+    '/dashboard',
+    '/dashboard/conversations',
+    '/dashboard/leads',
+    '/dashboard/calendrier',
+  ],
   whatsapp: true,
   leads: true,
   leadsPermissions: FULL_LEADS_PERMISSIONS,
@@ -49,7 +54,11 @@ const FULL_ADMIN_PERMISSIONS: RolePermissions = {
 };
 
 const WHATSAPP_ADMIN_PERMISSIONS: RolePermissions = {
-  pages: ['/dashboard/conversations', '/dashboard/leads'],
+  pages: [
+    '/dashboard/conversations',
+    '/dashboard/leads',
+    '/dashboard/calendrier',
+  ],
   whatsapp: true,
   leads: true,
   leadsPermissions: FULL_LEADS_PERMISSIONS,
@@ -58,7 +67,7 @@ const WHATSAPP_ADMIN_PERMISSIONS: RolePermissions = {
   devis: false,
   factures: false,
   propositions: false,
-  meetings: false,
+  meetings: true,
   users: false,
   upload: false,
 };

@@ -17,6 +17,7 @@ import type { AppUser } from '../auth/types/app-user';
 import { assertFullAdmin } from '../common/utils/access';
 import { CreateMeetingDto } from './dto/create-meeting.dto';
 import { ListMeetingsQueryDto } from './dto/list-meetings-query.dto';
+import { SendReminderDto } from './dto/send-reminder.dto';
 import { UpdateMeetingDto } from './dto/update-meeting.dto';
 import { MeetingsReminderService } from './meetings-reminder.service';
 import { MeetingsService } from './meetings.service';
@@ -78,14 +79,23 @@ export class MeetingsController {
     return this.meetings.remove(id, req.user);
   }
 
-  /** Admin-only: force-send WhatsApp / email reminder for testing. */
+  /**
+   * Admin-only: envoi manuel immédiat.
+   * Indépendant du scheduler — ne marque PAS remindersStatus (2d/24h/2h).
+   * Body optionnel : `{ "channel": "whatsapp"|"email" }` (offset ignoré pour les jobs).
+   */
   @Post(':id/send-reminder')
   async sendReminder(
     @Param('id') id: string,
     @Req() req: { user: AppUser },
+    @Body() dto?: SendReminderDto,
   ) {
     assertFullAdmin(req.user);
-    return this.reminders.sendReminderForMeetingId(id, { force: true });
+    return this.reminders.sendReminderForMeetingId(id, {
+      force: true,
+      channel: dto?.channel,
+      offset: dto?.offset,
+    });
   }
 
   /** Admin-only: regenerate a unique Google Meet link. */

@@ -1,4 +1,4 @@
-import { Transform } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   IsDateString,
   IsEmail,
@@ -8,8 +8,10 @@ import {
   IsUUID,
   MaxLength,
   MinLength,
+  ValidateNested,
 } from 'class-validator';
 import { MEETING_STATUSES } from '../types/meeting.types';
+import { MeetingRemindersDto } from './meeting-reminders.dto';
 
 function emptyToUndefined(v: unknown): unknown {
   if (v === '' || v === null) return undefined;
@@ -61,4 +63,9 @@ export class UpdateMeetingDto {
   @IsString({ message: 'notes invalide' })
   @MaxLength(5000, { message: 'notes trop long' })
   notes?: string | null;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => MeetingRemindersDto)
+  reminders?: MeetingRemindersDto;
 }

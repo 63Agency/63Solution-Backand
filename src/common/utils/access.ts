@@ -1,6 +1,11 @@
 import { ForbiddenException } from '@nestjs/common';
 import type { AppUser } from '../../auth/types/app-user';
-import { canAccessLeads, isFullAdmin, isWhatsappAdmin } from './roles';
+import {
+  canAccessLeads,
+  canAccessMeetings,
+  isFullAdmin,
+  isWhatsappAdmin,
+} from './roles';
 
 export function assertFullAdmin(user: AppUser): void {
   if (!isFullAdmin(user.role)) {
@@ -18,11 +23,20 @@ export function assertCanAccessLeads(user: AppUser): void {
   }
 }
 
+export function assertCanAccessMeetings(user: AppUser): void {
+  if (!canAccessMeetings(user.role)) {
+    throw new ForbiddenException({
+      message: 'Accès au calendrier non autorisé.',
+    });
+  }
+}
+
 /** Préfixes API autorisés pour le rôle admin_whatsapp (hors routes publiques). */
 const WHATSAPP_ADMIN_API_PREFIXES = [
   '/whatsapp',
   '/notifications',
   '/leads',
+  '/meetings',
   '/clickup/sync',
   '/auth/me',
   '/auth/change-password',
@@ -63,7 +77,7 @@ export function assertWhatsappAdminApiAccess(
 
   if (!isWhatsappAdminApiAllowed(method, path)) {
     throw new ForbiddenException({
-      message: 'Accès réservé aux pages WhatsApp et Leads.',
+      message: 'Accès réservé aux pages WhatsApp, Leads et Calendrier.',
     });
   }
 }
