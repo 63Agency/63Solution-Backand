@@ -23,7 +23,7 @@ async function bootstrap() {
         callback(null, true);
       } else {
         callback(null, false);
-      }
+      } 
     },
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Authorization', 'Content-Type'],

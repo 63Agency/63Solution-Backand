@@ -14,7 +14,7 @@ import {
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import type { AppUser } from '../auth/types/app-user';
-import { assertFullAdmin } from '../common/utils/access';
+import { assertCanAccessMeetings } from '../common/utils/access';
 import { CreateMeetingDto } from './dto/create-meeting.dto';
 import { CreateBlockedDayDto, ListBlockedDaysQueryDto } from './dto/blocked-day.dto';
 import { ListMeetingsQueryDto } from './dto/list-meetings-query.dto';
@@ -109,7 +109,7 @@ export class MeetingsController {
   }
 
   /**
-   * Admin-only: envoi manuel immédiat.
+   * Envoi manuel immédiat (admin + admin_whatsapp).
    * Indépendant du scheduler — ne marque PAS remindersStatus (2d/24h/2h).
    * Body optionnel : `{ "channel": "whatsapp"|"email" }` (offset ignoré pour les jobs).
    */
@@ -119,7 +119,7 @@ export class MeetingsController {
     @Req() req: { user: AppUser },
     @Body() dto?: SendReminderDto,
   ) {
-    assertFullAdmin(req.user);
+    assertCanAccessMeetings(req.user);
     return this.reminders.sendReminderForMeetingId(id, {
       force: true,
       channel: dto?.channel,
