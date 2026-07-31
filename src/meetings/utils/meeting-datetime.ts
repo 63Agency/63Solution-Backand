@@ -59,13 +59,19 @@ export function firstNameOnly(fullName: string): string {
 }
 
 /** YYYY-MM-DD in Africa/Casablanca for a given instant. */
-function casablancaDateKey(ref: Date): string {
+export function casablancaDateKeyFromIso(iso: string | Date): string {
+  const d = typeof iso === 'string' ? new Date(iso) : iso;
   return new Intl.DateTimeFormat('en-CA', {
     timeZone: TZ,
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
-  }).format(ref);
+  }).format(d);
+}
+
+/** @deprecated use casablancaDateKeyFromIso */
+function casablancaDateKey(ref: Date): string {
+  return casablancaDateKeyFromIso(ref);
 }
 
 /**

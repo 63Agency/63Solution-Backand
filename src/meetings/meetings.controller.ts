@@ -16,9 +16,11 @@ import { AuthGuard } from '@nestjs/passport';
 import type { AppUser } from '../auth/types/app-user';
 import { assertFullAdmin } from '../common/utils/access';
 import { CreateMeetingDto } from './dto/create-meeting.dto';
+import { CreateBlockedDayDto, ListBlockedDaysQueryDto } from './dto/blocked-day.dto';
 import { ListMeetingsQueryDto } from './dto/list-meetings-query.dto';
 import { SendReminderDto } from './dto/send-reminder.dto';
 import { UpdateMeetingDto } from './dto/update-meeting.dto';
+import { MeetingsBlockedDaysService } from './meetings-blocked-days.service';
 import { MeetingsReminderService } from './meetings-reminder.service';
 import { MeetingsService } from './meetings.service';
 
@@ -28,6 +30,7 @@ export class MeetingsController {
   constructor(
     private readonly meetings: MeetingsService,
     private readonly reminders: MeetingsReminderService,
+    private readonly blockedDays: MeetingsBlockedDaysService,
   ) {}
 
   @Get()
@@ -51,6 +54,32 @@ export class MeetingsController {
   @Get('stats')
   stats(@Req() req: { user: AppUser }) {
     return this.meetings.stats(req.user);
+  }
+
+  @Get('blocked-days')
+  listBlockedDays(
+    @Query() query: ListBlockedDaysQueryDto,
+    @Req() req: { user: AppUser },
+  ) {
+    return this.blockedDays.list(query, req.user);
+  }
+
+  @Post('blocked-days')
+  @HttpCode(HttpStatus.CREATED)
+  createBlockedDay(
+    @Body() dto: CreateBlockedDayDto,
+    @Req() req: { user: AppUser },
+  ) {
+    return this.blockedDays.create(dto, req.user);
+  }
+
+  @Delete('blocked-days/:id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async removeBlockedDay(
+    @Param('id') id: string,
+    @Req() req: { user: AppUser },
+  ) {
+    await this.blockedDays.remove(id, req.user);
   }
 
   @Post()

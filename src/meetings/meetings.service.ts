@@ -14,6 +14,7 @@ import type { CreateMeetingDto } from './dto/create-meeting.dto';
 import type { ListMeetingsQueryDto } from './dto/list-meetings-query.dto';
 import type { UpdateMeetingDto } from './dto/update-meeting.dto';
 import { GoogleMeetService } from './google-meet.service';
+import { MeetingsBlockedDaysService } from './meetings-blocked-days.service';
 import { MeetingsReminderService } from './meetings-reminder.service';
 import type {
   Meeting,
@@ -93,6 +94,7 @@ export class MeetingsService {
     private readonly googleMeet: GoogleMeetService,
     @Inject(forwardRef(() => MeetingsReminderService))
     private readonly reminderJobs: MeetingsReminderService,
+    private readonly blockedDays: MeetingsBlockedDaysService,
   ) {}
 
   private async enrich(row: MeetingRow): Promise<Meeting> {
@@ -247,6 +249,7 @@ export class MeetingsService {
 
     const meet = await this.googleMeet.createSpace();
     const meetingDateIso = new Date(meetingDate).toISOString();
+    await this.blockedDays.assertMeetingDateNotBlocked(meetingDateIso);
 
     const now = new Date().toISOString();
     const sb = this.supabase.getClient();
@@ -424,6 +427,7 @@ export class MeetingsService {
         throw new BadRequestException({ message: 'meetingDate invalide' });
       }
       const nextIso = new Date(dto.meetingDate).toISOString();
+      await this.blockedDays.assertMeetingDateNotBlocked(nextIso);
       patch.meeting_date = nextIso;
 
       if (nextIso !== existing.meeting_date) {
