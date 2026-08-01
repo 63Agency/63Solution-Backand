@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Injectable,
   Logger,
   ServiceUnavailableException,
@@ -489,6 +490,78 @@ export class MetaService {
     );
 
     return templates;
+  }
+
+  /**
+   * Attempt to revoke an outbound message on the contact's phone (« supprimer pour tout le monde »).
+   *
+   * Official WhatsApp Cloud API does not document a reliable delete/revoke endpoint.
+   * We try the same Messages endpoint with `status: "deleted"` (mirrors mark-as-read).
+   * On rejection (unsupported, too old, invalid wamid), throw a clear 4xx for the CRM toast.
+   */
+  async deleteMessageForEveryone(metaMessageId: string): Promise<void> {
+    const accessToken = this.requireMetaAccessToken();
+    const messageId = metaMessageId.trim();
+    if (!messageId) {
+      throw new BadRequestException({
+        message: 'metaMessageId manquant — impossible de révoquer sur WhatsApp.',
+      });
+    }
+
+    const payload = {
+      messaging_product: 'whatsapp',
+      status: 'deleted',
+      message_id: messageId,
+    };
+
+    this.logger.log(`Meta deleteMessage message_id=${messageId}`);
+
+    const res = await fetch(META_MESSAGES_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const rawText = await res.text().catch(() => '');
+    let raw: Record<string, unknown> = {};
+    try {
+      raw = rawText ? (JSON.parse(rawText) as Record<string, unknown>) : {};
+    } catch {
+      raw = { parseError: rawText.slice(0, 500) };
+    }
+
+    this.logger.log(
+      `Meta deleteMessage status=${res.status} body=${rawText.slice(0, 500)}`,
+    );
+
+    if (!res.ok) {
+      const errObj =
+        raw.error && typeof raw.error === 'object'
+          ? (raw.error as Record<string, unknown>)
+          : null;
+      const apiMessage =
+        (typeof errObj?.message === 'string' ? errObj.message : null) ||
+        (typeof raw.message === 'string' ? raw.message : null) ||
+        rawText.slice(0, 300) ||
+        'révocation Meta impossible';
+
+      const lower = apiMessage.toLowerCase();
+      const unsupported =
+        lower.includes('status') ||
+        lower.includes('deleted') ||
+        lower.includes('unsupported') ||
+        lower.includes('not supported') ||
+        errObj?.code === 100;
+
+      throw new BadRequestException({
+        message: unsupported
+          ? `Suppression pour tout le monde indisponible via Cloud API : ${apiMessage}. Utilisez « Supprimer pour moi » (CRM uniquement).`
+          : `Meta: ${apiMessage}`,
+      });
+    }
   }
 
   /**

@@ -10,6 +10,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { SupabaseService } from '../supabase/supabase.service';
 import { SendWhatsappMessageDto } from './dto/send-whatsapp-message.dto';
 import { BroadcastWhatsappMessageDto } from './dto/broadcast-whatsapp-message.dto';
+import { UpdateWhatsappMessageDto } from './dto/update-whatsapp-message.dto';
 import type {
   MessageDirection,
   WhatsappConversation,
@@ -54,6 +55,9 @@ type MessageRow = {
   media_url?: string | null;
   file_name?: string | null;
   file_size?: number | null;
+  edited_at?: string | null;
+  deleted_at?: string | null;
+  is_deleted?: boolean | null;
 };
 
 function pickStr(obj: Record<string, unknown>, ...keys: string[]): string {
@@ -270,6 +274,9 @@ function mapMessage(row: MessageRow): WhatsappMessage {
     watiMessageId,
     metaMessageId: watiMessageId,
     createdAt: String(row.sent_at ?? row.created_at),
+    editedAt: row.edited_at ? String(row.edited_at) : null,
+    isDeleted: Boolean(row.is_deleted) || Boolean(row.deleted_at),
+    deletedAt: row.deleted_at ? String(row.deleted_at) : null,
     replyTo:
       replyWamid || replyPreview
         ? {
@@ -282,7 +289,7 @@ function mapMessage(row: MessageRow): WhatsappMessage {
 }
 
 const MESSAGE_SELECT =
-  'id, conversation_id, direction, body, type, status, wati_message_id, sent_at, created_at, reply_to_wati_message_id, reply_to_preview, reply_to_author, media_url, file_name, file_size';
+  'id, conversation_id, direction, body, type, status, wati_message_id, sent_at, created_at, reply_to_wati_message_id, reply_to_preview, reply_to_author, media_url, file_name, file_size, edited_at, deleted_at, is_deleted';
 
 function parseWebhookTimestamp(raw: string): string | null {
   if (!raw) return null;
@@ -518,6 +525,118 @@ export class WhatsappService {
     });
 
     return message;
+  }
+
+  /**
+   * CRM-only text edit. Meta Cloud API has no reliable message-edit call —
+   * the contact still sees the original text on their phone.
+   */
+  async updateMessage(
+    conversationId: string,
+    messageId: string,
+    dto: UpdateWhatsappMessageDto,
+  ): Promise<WhatsappMessage> {
+    const text = (dto.text ?? '').trim();
+    if (!text) {
+      throw new BadRequestException({ message: 'text requis' });
+    }
+
+    const conv = await this.conversationByIdOr404(conversationId);
+    const row = await this.messageByIdOr404(conversationId, messageId);
+
+    if (Boolean(row.is_deleted) || Boolean(row.deleted_at)) {
+      throw new BadRequestException({
+        message: 'message déjà supprimé',
+      });
+    }
+
+    if (String(row.direction) !== 'outbound') {
+      throw new BadRequestException({
+        message: 'seuls les messages sortants peuvent être modifiés',
+      });
+    }
+
+    if (String(row.type ?? 'text') !== 'text') {
+      throw new BadRequestException({
+        message: 'seuls les messages texte peuvent être modifiés',
+      });
+    }
+
+    const editedAt = new Date().toISOString();
+    const { data, error } = await this.supabase
+      .getClient()
+      .from('whatsapp_messages')
+      .update({ body: text, edited_at: editedAt })
+      .eq('id', messageId)
+      .eq('conversation_id', conversationId)
+      .select(MESSAGE_SELECT)
+      .single();
+
+    if (error || !data) {
+      throw new ConflictException({
+        message: error?.message ?? 'mise à jour message impossible',
+      });
+    }
+
+    await this.refreshConversationPreviewIfLatest(conv, data as MessageRow);
+
+    return mapMessage(data as MessageRow);
+  }
+
+  /**
+   * Soft-delete in CRM. With forEveryone=true, also attempt Meta revoke (outbound only).
+   */
+  async deleteMessage(
+    conversationId: string,
+    messageId: string,
+    forEveryone = false,
+  ): Promise<WhatsappMessage> {
+    const conv = await this.conversationByIdOr404(conversationId);
+    const row = await this.messageByIdOr404(conversationId, messageId);
+
+    if (Boolean(row.is_deleted) || Boolean(row.deleted_at)) {
+      return mapMessage(row);
+    }
+
+    if (forEveryone) {
+      if (String(row.direction) !== 'outbound') {
+        throw new BadRequestException({
+          message:
+            'suppression pour tout le monde réservée aux messages sortants',
+        });
+      }
+      const wamid = row.wati_message_id?.trim();
+      if (!wamid) {
+        throw new BadRequestException({
+          message:
+            'metaMessageId manquant — impossible de supprimer pour tout le monde',
+        });
+      }
+      await this.meta.deleteMessageForEveryone(wamid);
+    }
+
+    const deletedAt = new Date().toISOString();
+    const { data, error } = await this.supabase
+      .getClient()
+      .from('whatsapp_messages')
+      .update({
+        is_deleted: true,
+        deleted_at: deletedAt,
+      })
+      .eq('id', messageId)
+      .eq('conversation_id', conversationId)
+      .select(MESSAGE_SELECT)
+      .single();
+
+    if (error || !data) {
+      throw new ConflictException({
+        message: error?.message ?? 'suppression message impossible',
+      });
+    }
+
+    await this.refreshConversationPreviewIfLatest(conv, data as MessageRow);
+
+    return mapMessage(data as MessageRow);
   }
 
   /**
@@ -1120,6 +1239,86 @@ export class WhatsappService {
       throw new NotFoundException({ message: 'conversation introuvable' });
     }
     return data as ConversationRow;
+  }
+
+  private async messageByIdOr404(
+    conversationId: string,
+    messageId: string,
+  ): Promise<MessageRow> {
+    const { data, error } = await this.supabase
+      .getClient()
+      .from('whatsapp_messages')
+      .select(MESSAGE_SELECT)
+      .eq('id', messageId)
+      .eq('conversation_id', conversationId)
+      .maybeSingle();
+
+    if (error) {
+      throw new ConflictException({ message: error.message });
+    }
+    if (!data) {
+      throw new NotFoundException({ message: 'message introuvable' });
+    }
+    return data as MessageRow;
+  }
+
+  /**
+   * If the touched message is the conversation's latest (by created_at),
+   * refresh last_message_text / last_message_at from the newest non-deleted row.
+   */
+  private async refreshConversationPreviewIfLatest(
+    conv: ConversationRow,
+    touched: MessageRow,
+  ): Promise<void> {
+    const touchedAt = String(touched.sent_at ?? touched.created_at);
+    const lastAt = conv.last_message_at ? String(conv.last_message_at) : null;
+
+    const isLikelyLatest = !lastAt || touchedAt >= lastAt;
+    if (!isLikelyLatest) {
+      return;
+    }
+
+    const { data, error } = await this.supabase
+      .getClient()
+      .from('whatsapp_messages')
+      .select(MESSAGE_SELECT)
+      .eq('conversation_id', conv.id)
+      .eq('is_deleted', false)
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      this.logger.warn(
+        `refreshConversationPreview failed: ${formatSupabaseError(error)}`,
+      );
+      return;
+    }
+
+    const latest = data as MessageRow | null;
+    if (!latest) {
+      await this.supabase
+        .getClient()
+        .from('whatsapp_conversations')
+        .update({
+          last_message_text: '',
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', conv.id);
+      return;
+    }
+
+    await this.touchConversation(conv.id, {
+      lastMessageText: previewForConversation(
+        String(latest.type ?? 'text'),
+        String(latest.body ?? ''),
+      ),
+      lastMessageAt: String(latest.sent_at ?? latest.created_at),
+      contactName: conv.contact_name,
+      watiContactId: conv.wati_contact_id,
+      watiConversationId: conv.wati_conversation_id,
+    });
   }
 
   private async ensureConversation(input: {

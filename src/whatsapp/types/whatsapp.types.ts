@@ -28,6 +28,11 @@ export type WhatsappMessage = {
   /** Alias Meta (même valeur que watiMessageId). */
   metaMessageId: string | null;
   createdAt: string;
+  /** ISO timestamp if the agent edited the text (CRM-only; contact may still see original). */
+  editedAt: string | null;
+  /** Soft-delete flag — row kept for quote/history consistency. */
+  isDeleted: boolean;
+  deletedAt: string | null;
   /** Citation WhatsApp (réponse à un message). */
   replyTo: {
     id: string;
