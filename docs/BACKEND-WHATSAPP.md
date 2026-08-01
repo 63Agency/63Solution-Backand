@@ -12,11 +12,7 @@ Front envoi     → Nest → Meta Graph API (pas d’appel Meta depuis le naviga
 
 ## Setup
 
-1. Exécuter dans Supabase (ordre) :
-   - `sql/014-whatsapp-tables.sql`
-   - `sql/017-whatsapp-reply-to.sql` / `sql/018-whatsapp-media-fields.sql` si besoin
-   - `sql/017-notifications-table.sql`
-   - `sql/028-whatsapp-message-edit-delete.sql` (edit / soft-delete)
+1. Exécuter `sql/014-whatsapp-tables.sql` puis `sql/017-notifications-table.sql` dans Supabase.
 2. `.env` :
    - `META_VERIFY_TOKEN` — chaîne aléatoire (même valeur dans Meta Developer → Webhook)
    - `META_ACCESS_TOKEN` — token Graph API (celui utilisé dans N8N)
@@ -52,49 +48,11 @@ Traite le payload `whatsapp_business_account` :
 |---------|--------|-------------|
 | GET | `/whatsapp/conversations` | Liste |
 | GET | `/whatsapp/conversations/:id` | Détail |
-| GET | `/whatsapp/conversations/:id/messages` | Messages (inclut `editedAt` / `isDeleted` / `deletedAt`) |
+| GET | `/whatsapp/conversations/:id/messages` | Messages |
 | POST | `/whatsapp/conversations/:id/messages` | `{ "text": "..." }` → Meta + save outbound |
-| PATCH | `/whatsapp/conversations/:id/messages/:messageId` | Éditer le texte (**CRM only**) |
-| DELETE | `/whatsapp/conversations/:id/messages/:messageId?forEveryone=` | Soft-delete CRM (+ Meta si `true`) |
 | PATCH | `/whatsapp/conversations/:id/read` | `unread_count = 0` + notifications liées lues |
 
 Chaque message **inbound** (webhook Meta) met à jour `last_message_text`, `last_message_at`, incrémente `unread_count`, et crée une ligne `notifications` (`type: whatsapp.message`). Les messages **outbound** (POST messages) ne touchent pas `unread_count`.
-
-### PATCH message (édition)
-
-```http
-PATCH /whatsapp/conversations/:id/messages/:messageId
-Authorization: Bearer <token>
-Content-Type: application/json
-
-{ "text": "nouveau contenu" }
-```
-
-- Uniquement messages **outbound** de type `text`.
-- `text` vide → `400`.
-- Message / conversation inconnus → `404`.
-- Persiste `body` + `edited_at` ; réponse = objet message complet (`editedAt` inclus).
-- Met à jour `lastMessageText` / `lastMessageAt` si le message édité est le plus récent.
-- **CRM only** : Meta Cloud API n’offre pas d’édition fiable — le contact voit toujours le texte d’origine sur son téléphone.
-
-### DELETE message (soft-delete)
-
-```http
-DELETE /whatsapp/conversations/:id/messages/:messageId?forEveryone=false
-Authorization: Bearer <token>
-```
-
-| Query | Effet |
-|-------|--------|
-| `forEveryone=false` (défaut) | Soft-delete CRM (`is_deleted`, `deleted_at`) |
-| `forEveryone=true` | Soft-delete CRM **+** tentative de révocation Meta (outbound only) |
-
-- La ligne est **conservée** ; GET messages renvoie `isDeleted: true` / `deletedAt`.
-- Inbound + `forEveryone=true` → `400`.
-- Si Meta refuse la révocation → `400` clair (toast front + rollback optimistic) ; pas de soft-delete côté CRM.
-- Si le message supprimé était le dernier, le preview conversation est recalculé.
-
-> **Note Meta** : la Cloud API ne documente pas de delete/revoke stable. Nest tente `status: "deleted"` sur l’endpoint messages ; en cas d’échec, utiliser « Supprimer pour moi ».
 
 ## API Notifications (JWT)
 
@@ -131,4 +89,3 @@ Content-Type: application/json
 - `src/whatsapp/whatsapp.controller.ts`
 - `src/whatsapp/whatsapp-webhook.controller.ts`
 - `sql/014-whatsapp-tables.sql`
-- `sql/028-whatsapp-message-edit-delete.sql`
