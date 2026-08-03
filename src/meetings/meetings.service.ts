@@ -12,12 +12,15 @@ import { assertCanAccessMeetings, assertFullAdmin } from '../common/utils/access
 import { SupabaseService } from '../supabase/supabase.service';
 import type { CreateMeetingDto } from './dto/create-meeting.dto';
 import type { ListMeetingsQueryDto } from './dto/list-meetings-query.dto';
+import type { MeetingMemberDto } from './dto/meeting-member.dto';
 import type { UpdateMeetingDto } from './dto/update-meeting.dto';
 import { GoogleMeetService } from './google-meet.service';
 import { MeetingsBlockedDaysService } from './meetings-blocked-days.service';
 import { MeetingsReminderService } from './meetings-reminder.service';
 import type {
   Meeting,
+  MeetingMember,
+  MeetingMemberRow,
   MeetingReminderRow,
   MeetingRemindersConfig,
   MeetingRow,
@@ -37,13 +40,25 @@ import {
 
 const ACTIVE_REMINDER_STATUSES: MeetingStatus[] = ['scheduled'];
 
+const MEMBER_SELECT = 'id, meeting_id, user_id, name, phone, email, created_at';
+
 function clean(value: string | undefined | null): string {
   return (value ?? '').trim();
+}
+
+function mapMember(row: MeetingMemberRow): MeetingMember {
+  return {
+    userId: row.user_id ? String(row.user_id) : null,
+    name: String(row.name ?? ''),
+    phone: row.phone ? String(row.phone) : null,
+    email: row.email ? String(row.email) : null,
+  };
 }
 
 function mapMeetingBase(
   r: MeetingRow,
   jobs: MeetingReminderRow[] = [],
+  members: MeetingMember[] = [],
 ): Meeting {
   const reminders = normalizeRemindersConfig(
     (r.reminders as MeetingRemindersConfig | null) ?? undefined,
@@ -62,6 +77,7 @@ function mapMeetingBase(
     contactName: String(r.contact_name ?? ''),
     contactPhone: r.contact_phone ? String(r.contact_phone) : null,
     contactEmail: r.contact_email ? String(r.contact_email) : null,
+    members,
     status: String(r.status ?? 'scheduled') as MeetingStatus,
     reminderWhatsappSent:
       legacy.reminderWhatsappSent || Boolean(r.reminder_whatsapp_sent),
@@ -98,15 +114,132 @@ export class MeetingsService {
   ) {}
 
   private async enrich(row: MeetingRow): Promise<Meeting> {
-    const jobs = await this.reminderJobs.listJobsForMeeting(row.id);
-    return mapMeetingBase(row, jobs);
+    const [jobs, members] = await Promise.all([
+      this.reminderJobs.listJobsForMeeting(row.id),
+      this.loadMembersForMeeting(row.id),
+    ]);
+    return mapMeetingBase(row, jobs, members);
   }
 
   private async enrichMany(rows: MeetingRow[]): Promise<Meeting[]> {
-    const jobsMap = await this.reminderJobs.listJobsForMeetings(
-      rows.map((r) => r.id),
+    const ids = rows.map((r) => r.id);
+    const [jobsMap, membersMap] = await Promise.all([
+      this.reminderJobs.listJobsForMeetings(ids),
+      this.loadMembersForMeetings(ids),
+    ]);
+    return rows.map((r) =>
+      mapMeetingBase(r, jobsMap.get(r.id) ?? [], membersMap.get(r.id) ?? []),
     );
-    return rows.map((r) => mapMeetingBase(r, jobsMap.get(r.id) ?? []));
+  }
+
+  private async loadMembersForMeeting(
+    meetingId: string,
+  ): Promise<MeetingMember[]> {
+    const map = await this.loadMembersForMeetings([meetingId]);
+    return map.get(meetingId) ?? [];
+  }
+
+  private async loadMembersForMeetings(
+    meetingIds: string[],
+  ): Promise<Map<string, MeetingMember[]>> {
+    const map = new Map<string, MeetingMember[]>();
+    for (const id of meetingIds) map.set(id, []);
+    if (meetingIds.length === 0) return map;
+
+    const { data, error } = await this.supabase
+      .getClient()
+      .from('meeting_members')
+      .select(MEMBER_SELECT)
+      .in('meeting_id', meetingIds)
+      .order('created_at', { ascending: true });
+
+    if (error) {
+      this.logger.warn(
+        `loadMembersForMeetings failed: ${error.message}`,
+      );
+      return map;
+    }
+
+    for (const row of (data ?? []) as MeetingMemberRow[]) {
+      const mid = String(row.meeting_id);
+      const list = map.get(mid) ?? [];
+      list.push(mapMember(row));
+      map.set(mid, list);
+    }
+    return map;
+  }
+
+  /** Normalize + validate members; each needs phone and/or email. */
+  private normalizeMembersInput(
+    raw: MeetingMemberDto[] | undefined,
+  ): MeetingMember[] {
+    if (!raw || raw.length === 0) return [];
+
+    const members: MeetingMember[] = [];
+    for (const item of raw) {
+      const name = clean(item.name);
+      if (!name) {
+        throw new BadRequestException({
+          message: 'members[].name requis',
+        });
+      }
+      const phone = normalizeMeetingPhone(item.phone);
+      const email = clean(item.email).toLowerCase() || null;
+      if (!phone && !email) {
+        throw new BadRequestException({
+          message: `Membre « ${name} » : téléphone ou email requis.`,
+        });
+      }
+      members.push({
+        userId: item.userId?.trim() || null,
+        name,
+        phone,
+        email,
+      });
+    }
+    return members;
+  }
+
+  /** Replace the full members list for a meeting (delete + insert). */
+  private async replaceMembers(
+    meetingId: string,
+    members: MeetingMember[],
+  ): Promise<MeetingMember[]> {
+    const sb = this.supabase.getClient();
+
+    const { error: delError } = await sb
+      .from('meeting_members')
+      .delete()
+      .eq('meeting_id', meetingId);
+
+    if (delError) {
+      throw new ConflictException({
+        message: delError.message ?? 'Suppression des membres impossible',
+      });
+    }
+
+    if (members.length === 0) return [];
+
+    const rows = members.map((m) => ({
+      meeting_id: meetingId,
+      user_id: m.userId,
+      name: m.name,
+      phone: m.phone,
+      email: m.email,
+    }));
+
+    const { data, error } = await sb
+      .from('meeting_members')
+      .insert(rows)
+      .select(MEMBER_SELECT);
+
+    if (error) {
+      throw new ConflictException({
+        message: error.message ?? 'Enregistrement des membres impossible',
+      });
+    }
+
+    return ((data ?? []) as MeetingMemberRow[]).map(mapMember);
   }
 
   async list(query: ListMeetingsQueryDto, user: AppUser) {
@@ -284,7 +417,13 @@ export class MeetingsService {
       });
     }
 
-    let meeting = mapMeetingBase(data as MeetingRow);
+    const members = this.normalizeMembersInput(dto.members);
+    const savedMembers = await this.replaceMembers(
+      String((data as MeetingRow).id),
+      members,
+    );
+
+    let meeting = mapMeetingBase(data as MeetingRow, [], savedMembers);
 
     if (ACTIVE_REMINDER_STATUSES.includes(meeting.status)) {
       try {
@@ -299,7 +438,7 @@ export class MeetingsService {
     }
 
     this.logger.log(
-      `Meeting created id=${meeting.id} meet=${meet?.meetLink ? 'yes' : 'no'}`,
+      `Meeting created id=${meeting.id} meet=${meet?.meetLink ? 'yes' : 'no'} members=${savedMembers.length}`,
     );
     return meeting;
   }
@@ -486,6 +625,12 @@ export class MeetingsService {
       rescheduleJobs = true;
     }
 
+    let membersToSave: MeetingMember[] | undefined;
+    if (dto.members !== undefined) {
+      membersToSave = this.normalizeMembersInput(dto.members);
+      rescheduleJobs = true;
+    }
+
     const nextPhone =
       patch.contact_phone !== undefined
         ? (patch.contact_phone as string | null)
@@ -515,7 +660,11 @@ export class MeetingsService {
       });
     }
 
-    let meeting = mapMeetingBase(data as MeetingRow);
+    if (membersToSave !== undefined) {
+      await this.replaceMembers(id, membersToSave);
+    }
+
+    let meeting = await this.enrich(data as MeetingRow);
 
     if (rescheduleJobs) {
       try {
@@ -533,8 +682,6 @@ export class MeetingsService {
           `Reschedule reminders failed id=${meeting.id}: ${message}`,
         );
       }
-    } else {
-      meeting = await this.enrich(data as MeetingRow);
     }
 
     this.logger.log(`Meeting updated id=${id}`);

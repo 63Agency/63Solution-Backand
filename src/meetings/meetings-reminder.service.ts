@@ -17,6 +17,7 @@ import {
   firstNameOnly,
   formatMeetingDate,
 } from './utils/meeting-datetime';
+import { normalizeMeetingPhone } from './utils/meeting-phone';
 import {
   computeSendAt,
   normalizeRemindersConfig,
@@ -27,6 +28,45 @@ import {
 type DueJob = MeetingReminderRow & {
   meeting?: Meeting;
 };
+
+type WhatsappRecipient = { phone: string; name: string };
+type EmailRecipient = { email: string; name: string };
+
+function meetingWhatsappRecipients(meeting: Meeting): WhatsappRecipient[] {
+  const seen = new Set<string>();
+  const out: WhatsappRecipient[] = [];
+
+  const add = (phone: string | null | undefined, name: string) => {
+    const normalized = normalizeMeetingPhone(phone);
+    if (!normalized || seen.has(normalized)) return;
+    seen.add(normalized);
+    out.push({ phone: normalized, name: name.trim() || 'Contact' });
+  };
+
+  add(meeting.contactPhone, meeting.contactName);
+  for (const m of meeting.members ?? []) {
+    add(m.phone, m.name);
+  }
+  return out;
+}
+
+function meetingEmailRecipients(meeting: Meeting): EmailRecipient[] {
+  const seen = new Set<string>();
+  const out: EmailRecipient[] = [];
+
+  const add = (email: string | null | undefined, name: string) => {
+    const e = (email ?? '').trim().toLowerCase();
+    if (!e || seen.has(e)) return;
+    seen.add(e);
+    out.push({ email: e, name: name.trim() || 'Contact' });
+  };
+
+  add(meeting.contactEmail, meeting.contactName);
+  for (const m of meeting.members ?? []) {
+    add(m.email, m.name);
+  }
+  return out;
+}
 
 @Injectable()
 export class MeetingsReminderService {
@@ -84,8 +124,8 @@ export class MeetingsReminderService {
         const sendAt = computeSendAt(meeting.meetingDate, offset);
         const hasContact =
           channel === 'whatsapp'
-            ? Boolean(meeting.contactPhone?.trim())
-            : Boolean(meeting.contactEmail?.trim());
+            ? meetingWhatsappRecipients(meeting).length > 0
+            : meetingEmailRecipients(meeting).length > 0;
 
         // Keep already-sent jobs unless date/reminders force a full reset.
         if (prev && prev.status === 'sent' && !options.resetSent) {
@@ -332,15 +372,18 @@ export class MeetingsReminderService {
     let emailSent = false;
     let failures = 0;
 
+    const waRecipients = meetingWhatsappRecipients(meeting);
+    const emailRecipients = meetingEmailRecipients(meeting);
+
     let current = meeting;
     if (
-      (channels.whatsapp && meeting.contactPhone) ||
-      (channels.email && meeting.contactEmail)
+      (channels.whatsapp && waRecipients.length > 0) ||
+      (channels.email && emailRecipients.length > 0)
     ) {
       current = await this.ensureMeetLink(current);
     }
 
-    if (channels.whatsapp && current.contactPhone) {
+    if (channels.whatsapp && waRecipients.length > 0) {
       try {
         const sent = await this.sendWhatsappReminder(current);
         if (sent) {
@@ -357,7 +400,7 @@ export class MeetingsReminderService {
       }
     }
 
-    if (channels.email && current.contactEmail) {
+    if (channels.email && emailRecipients.length > 0) {
       try {
         await this.sendEmailReminder(current);
         emailSent = true;
@@ -408,7 +451,7 @@ export class MeetingsReminderService {
 
     try {
       if (channel === 'whatsapp') {
-        if (!meeting.contactPhone?.trim()) {
+        if (meetingWhatsappRecipients(meeting).length === 0) {
           await this.markJob(job.id, {
             status: 'skipped',
             error: 'pas de téléphone',
@@ -424,7 +467,7 @@ export class MeetingsReminderService {
           return { sent: false, failed: true };
         }
       } else {
-        if (!meeting.contactEmail?.trim()) {
+        if (meetingEmailRecipients(meeting).length === 0) {
           await this.markJob(job.id, {
             status: 'skipped',
             error: 'pas d’email',
@@ -526,58 +569,94 @@ export class MeetingsReminderService {
       return false;
     }
 
-    const prenom = firstNameOnly(meeting.contactName);
-    const { date, time } = formatMeetingDate(meeting.meetingDate);
+    const recipients = meetingWhatsappRecipients(meeting);
+    if (recipients.length === 0) return false;
 
-    await this.meta.sendTemplateMessage(
-      meeting.contactPhone!,
-      'meeting_reminder_date',
-      'fr',
-      [
-        {
-          type: 'body',
-          parameters: [
-            { type: 'text', text: prenom },
-            { type: 'text', text: date },
-            { type: 'text', text: time },
-            { type: 'text', text: meetLink },
+    const { date, time } = formatMeetingDate(meeting.meetingDate);
+    let anySent = false;
+
+    for (const recipient of recipients) {
+      const prenom = firstNameOnly(recipient.name);
+      try {
+        await this.meta.sendTemplateMessage(
+          recipient.phone,
+          'meeting_reminder_date',
+          'fr',
+          [
+            {
+              type: 'body',
+              parameters: [
+                { type: 'text', text: prenom },
+                { type: 'text', text: date },
+                { type: 'text', text: time },
+                { type: 'text', text: meetLink },
+              ],
+            },
           ],
-        },
-      ],
-    );
-    return true;
+        );
+        anySent = true;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.logger.warn(
+          `[MeetingsReminder] WhatsApp fan-out failed id=${meeting.id} to=${recipient.phone}: ${message}`,
+        );
+      }
+    }
+
+    return anySent;
   }
 
   private async sendEmailReminder(meeting: Meeting): Promise<void> {
+    const recipients = meetingEmailRecipients(meeting);
+    if (recipients.length === 0) return;
+
     const { date, time } = formatMeetingDate(meeting.meetingDate);
-    const name = meeting.contactName.trim();
     const meetLink = meeting.meetLink?.trim() || '';
+    let anySent = false;
+    let lastError: unknown = null;
 
-    const lines = [
-      `Bonjour ${name},`,
-      '',
-      `Nous vous rappelons votre rendez-vous « ${meeting.title} ».`,
-      '',
-      `Date : ${date}`,
-      `Heure : ${time}`,
-    ];
+    for (const recipient of recipients) {
+      const lines = [
+        `Bonjour ${recipient.name},`,
+        '',
+        `Nous vous rappelons votre rendez-vous « ${meeting.title} ».`,
+        '',
+        `Date : ${date}`,
+        `Heure : ${time}`,
+      ];
 
-    if (meetLink) {
-      lines.push('', 'Rejoindre la réunion :', meetLink);
+      if (meetLink) {
+        lines.push('', 'Rejoindre la réunion :', meetLink);
+      }
+
+      lines.push(
+        '',
+        'Merci de confirmer votre présence ou de nous contacter si vous souhaitez reporter.',
+        '',
+        'Cordialement,',
+        "L'équipe 63 Agency",
+      );
+
+      try {
+        await this.mailer.sendMail({
+          to: recipient.email,
+          subject: 'Rappel : votre rendez-vous avec 63 Agency',
+          text: lines.join('\n'),
+        });
+        anySent = true;
+      } catch (err) {
+        lastError = err;
+        const message = err instanceof Error ? err.message : String(err);
+        this.logger.warn(
+          `[MeetingsReminder] Email fan-out failed id=${meeting.id} to=${recipient.email}: ${message}`,
+        );
+      }
     }
 
-    lines.push(
-      '',
-      'Merci de confirmer votre présence ou de nous contacter si vous souhaitez reporter.',
-      '',
-      'Cordialement,',
-      "L'équipe 63 Agency",
-    );
-
-    await this.mailer.sendMail({
-      to: meeting.contactEmail!,
-      subject: 'Rappel : votre rendez-vous avec 63 Agency',
-      text: lines.join('\n'),
-    });
+    if (!anySent && lastError) {
+      throw lastError instanceof Error
+        ? lastError
+        : new Error(String(lastError));
+    }
   }
 }

@@ -1,5 +1,7 @@
 import { Transform, Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
+  IsArray,
   IsDateString,
   IsEmail,
   IsIn,
@@ -11,6 +13,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { MEETING_STATUSES } from '../types/meeting.types';
+import { MeetingMemberDto } from './meeting-member.dto';
 import { MeetingRemindersDto } from './meeting-reminders.dto';
 
 function emptyToUndefined(v: unknown): unknown {
@@ -61,6 +64,13 @@ export class CreateMeetingDto {
   @IsString({ message: 'notes invalide' })
   @MaxLength(5000, { message: 'notes trop long' })
   notes?: string;
+
+  @IsOptional()
+  @IsArray({ message: 'members doit être un tableau' })
+  @ArrayMaxSize(50, { message: 'members max 50' })
+  @ValidateNested({ each: true })
+  @Type(() => MeetingMemberDto)
+  members?: MeetingMemberDto[];
 
   @IsOptional()
   @ValidateNested()

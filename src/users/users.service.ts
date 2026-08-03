@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import type { AppUser } from '../auth/types/app-user';
-import { assertFullAdmin } from '../common/utils/access';
+import { assertCanAccessMeetings, assertFullAdmin } from '../common/utils/access';
 import { isFullAdmin, normalizeApiRole, recommendedRoute } from '../common/utils/roles';
 import { getRolePermissions } from '../common/utils/permissions';
 import {
@@ -83,7 +83,8 @@ export class UsersService {
   }
 
   async list(user: AppUser) {
-    this.assertAdmin(user);
+    // admin + admin_whatsapp (picker membres calendrier — lecture seule).
+    assertCanAccessMeetings(user);
 
     const { data, error } = await this.supabase
       .getClient()

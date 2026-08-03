@@ -43,6 +43,23 @@ export type MeetingRemindersStatus = {
   email: ReminderChannelStatus;
 };
 
+export type MeetingMember = {
+  userId: string | null;
+  name: string;
+  phone: string | null;
+  email: string | null;
+};
+
+export type MeetingMemberRow = {
+  id: string;
+  meeting_id: string;
+  user_id: string | null;
+  name: string;
+  phone: string | null;
+  email: string | null;
+  created_at?: string;
+};
+
 export type MeetingRow = {
   id: string;
   lead_id: string | null;
@@ -85,6 +102,8 @@ export type Meeting = {
   contactName: string;
   contactPhone: string | null;
   contactEmail: string | null;
+  /** Staff interne (owner, assistant, …) — distinct du contact client/lead. */
+  members: MeetingMember[];
   status: MeetingStatus;
   reminderWhatsappSent: boolean;
   reminderEmailSent: boolean;
