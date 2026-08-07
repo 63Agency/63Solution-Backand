@@ -837,20 +837,43 @@ export class WhatsappService {
       if (!raw || typeof raw !== 'object') continue;
       const st = raw as Record<string, unknown>;
       const messageId = pickStr(st, 'id');
-      const status = pickStr(st, 'status');
+      const status = pickStr(st, 'status') || '(unknown)';
+      const recipient =
+        pickStr(st, 'recipient_id', 'recipient') ||
+        pickStr(st, 'to') ||
+        '(unknown)';
+
       const errors = Array.isArray(st.errors) ? st.errors : [];
-      const errorDetail =
-        errors.length > 0 && errors[0] && typeof errors[0] === 'object'
-          ? JSON.stringify(errors[0])
-          : '';
+      let errorSummary = '';
+      if (errors.length > 0 && errors[0] && typeof errors[0] === 'object') {
+        const e0 = errors[0] as Record<string, unknown>;
+        const code = e0.code != null ? String(e0.code) : '';
+        const title =
+          typeof e0.title === 'string'
+            ? e0.title
+            : typeof e0.message === 'string'
+              ? e0.message
+              : '';
+        let details = '';
+        if (e0.error_data && typeof e0.error_data === 'object') {
+          const ed = e0.error_data as Record<string, unknown>;
+          if (typeof ed.details === 'string') details = ed.details;
+        }
+        errorSummary = [code && `#${code}`, title, details]
+          .filter(Boolean)
+          .join(' | ');
+      }
+
       this.logger.log(
-        `${prefix} status update messageId=${messageId} status=${status}${errorDetail ? ` error=${errorDetail}` : ''}`,
+        `[WA STATUS] wamid=${messageId || '(none)'} status=${status} recipient=${recipient} error=${errorSummary || '-'}`,
       );
+
       if (status.toLowerCase().includes('fail')) {
         this.logger.warn(
-          `${prefix} delivery FAILED messageId=${messageId}${errorDetail ? ` — ${errorDetail}` : ''}`,
+          `[WA STATUS] DELIVERY FAILED wamid=${messageId || '(none)'} recipient=${recipient} error=${errorSummary || JSON.stringify(errors).slice(0, 500)}`,
         );
       }
+
       if (messageId) {
         await this.updateMessageStatus(messageId, status);
       }

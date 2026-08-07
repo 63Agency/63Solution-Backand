@@ -391,7 +391,10 @@ export class MetaService {
     };
 
     this.logger.log(
-      `Meta sendTemplate to=${phone} template=${templateName}/${languageCode} phoneNumberId=${this.getPhoneNumberId()} bodyParams=${JSON.stringify(
+      `[WA SEND] to="${phone}" template=${templateName} lang=${languageCode} phoneNumberId=${this.getPhoneNumberId()}`,
+    );
+    this.logger.log(
+      `Meta sendTemplate bodyParams=${JSON.stringify(
         bodyParamsFromComponents.length > 0
           ? bodyParamsFromComponents
           : resolvedVariable1 || null,
@@ -452,6 +455,10 @@ export class MetaService {
     const preview = previewTexts.length
       ? `[Template: ${templateName}] ${previewTexts.join(' | ')}`
       : `[Template: ${templateName}]`;
+
+    this.logger.log(
+      `[WA SEND] to="${phone}" template=${templateName}/${languageCode} (accepted request queued — wait for [WA STATUS] webhook for delivered/failed)`,
+    );
 
     return {
       whatsappMessageId: pickMessageId(raw),
