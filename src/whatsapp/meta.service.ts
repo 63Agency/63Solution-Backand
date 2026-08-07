@@ -11,16 +11,21 @@ import {
   type WhatsAppTemplate,
 } from './utils/whatsapp-templates';
 
-const META_MESSAGES_URL =
-  'https://graph.facebook.com/v18.0/1180177848511875/messages';
+const META_GRAPH_VERSION = 'v18.0';
 const META_TEMPLATES_URL =
-  'https://graph.facebook.com/v18.0/1551611006381024/message_templates';
+  `https://graph.facebook.com/${META_GRAPH_VERSION}/1551611006381024/message_templates`;
+const FALLBACK_PHONE_NUMBER_ID = '1180177848511875';
 
 function formatMetaSendError(errObj: Record<string, unknown> | null): string {
   const code = errObj?.code;
   const apiMessage =
     typeof errObj?.message === 'string' ? errObj.message : '';
-  const lower = apiMessage.toLowerCase();
+  const details =
+    errObj?.error_data && typeof errObj.error_data === 'object'
+      ? (errObj.error_data as Record<string, unknown>).details
+      : undefined;
+  const detailStr = typeof details === 'string' ? details : '';
+  const lower = `${apiMessage} ${detailStr}`.toLowerCase();
 
   // Meta 24h customer care window (131047, 131026, etc.)
   if (
@@ -37,6 +42,9 @@ function formatMetaSendError(errObj: Record<string, unknown> | null): string {
     );
   }
 
+  if (detailStr) {
+    return apiMessage ? `${apiMessage} (${detailStr})` : detailStr;
+  }
   return apiMessage || 'Envoi Meta impossible.';
 }
 
@@ -95,8 +103,13 @@ export class MetaService {
     return (
       this.configService.get<string>('WHATCHIMP_PHONE_NUMBER_ID')?.trim() ??
       this.configService.get<string>('META_PHONE_NUMBER_ID')?.trim() ??
-      ''
+      FALLBACK_PHONE_NUMBER_ID
     );
+  }
+
+  private messagesUrl(): string {
+    const phoneNumberId = this.getPhoneNumberId();
+    return `https://graph.facebook.com/${META_GRAPH_VERSION}/${encodeURIComponent(phoneNumberId)}/messages`;
   }
 
   private getApiToken(): string {
@@ -176,7 +189,7 @@ export class MetaService {
       `Meta sendText replyTo=${contextId ?? '(none)'} to=${phone}`,
     );
 
-    const res = await fetch(META_MESSAGES_URL, {
+    const res = await fetch(this.messagesUrl(), {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -269,7 +282,7 @@ export class MetaService {
       `Meta sendMedia type=${input.type} replyTo=${contextId ?? '(none)'} to=${phone}`,
     );
 
-    const res = await fetch(META_MESSAGES_URL, {
+    const res = await fetch(this.messagesUrl(), {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -367,6 +380,7 @@ export class MetaService {
 
     const payload = {
       messaging_product: 'whatsapp',
+      recipient_type: 'individual',
       to: phone,
       type: 'template',
       template: {
@@ -377,7 +391,7 @@ export class MetaService {
     };
 
     this.logger.log(
-      `Meta sendTemplate bodyParams=${JSON.stringify(
+      `Meta sendTemplate to=${phone} template=${templateName}/${languageCode} phoneNumberId=${this.getPhoneNumberId()} bodyParams=${JSON.stringify(
         bodyParamsFromComponents.length > 0
           ? bodyParamsFromComponents
           : resolvedVariable1 || null,
@@ -387,7 +401,7 @@ export class MetaService {
       `Meta sendTemplate payload=${JSON.stringify(payload)}`,
     );
 
-    const res = await fetch(META_MESSAGES_URL, {
+    const res = await fetch(this.messagesUrl(), {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -414,12 +428,18 @@ export class MetaService {
           ? (raw.error as Record<string, unknown>)
           : null;
       const apiMessage =
-        (typeof errObj?.message === 'string' ? errObj.message : null) ??
-        (typeof raw.message === 'string' ? raw.message : null) ??
+        formatMetaSendError(errObj) ||
+        (typeof raw.message === 'string' ? raw.message : null) ||
         JSON.stringify(raw).slice(0, 300);
-      this.logger.warn(`Meta sendTemplate ${res.status}: ${apiMessage}`);
+      this.logger.warn(
+        `Meta sendTemplate ${res.status} to=${phone} template=${templateName}/${languageCode}: ${apiMessage}`,
+      );
       throw new ServiceUnavailableException({
         message: `Meta: ${apiMessage}`,
+        metaStatus: res.status,
+        metaCode: errObj?.code ?? null,
+        to: phone,
+        template: templateName,
       });
     }
 

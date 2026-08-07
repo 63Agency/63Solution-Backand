@@ -122,5 +122,7 @@ export type Meeting = {
   notificationSent?: {
     whatsapp: boolean;
     email: boolean;
+    whatsappError?: string | null;
+    emailError?: string | null;
   };
 };

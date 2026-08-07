@@ -110,8 +110,9 @@ export class MeetingsController {
 
   /**
    * Envoi manuel immédiat (admin + admin_whatsapp).
-   * Indépendant du scheduler — ne marque PAS remindersStatus (2d/24h/2h).
-   * Body optionnel : `{ "channel": "whatsapp"|"email" }` (offset ignoré pour les jobs).
+   * Template Meta `meeting_reminder_date` (fr) — hors fenêtre 24h.
+   * Body optionnel : `{ "channel": "whatsapp"|"email" }`.
+   * Réponse : `{ ok, whatsappSent, emailSent, whatsappError, emailError, meeting }`.
    */
   @Post(':id/send-reminder')
   async sendReminder(
@@ -121,6 +122,7 @@ export class MeetingsController {
   ) {
     assertCanAccessMeetings(req.user);
     return this.reminders.sendReminderForMeetingId(id, {
+      // force=true : le bouton admin retente toujours (pas d’idempotence).
       force: true,
       channel: dto?.channel,
       offset: dto?.offset,

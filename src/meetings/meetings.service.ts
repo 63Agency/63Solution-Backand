@@ -437,7 +437,14 @@ export class MeetingsService {
       }
     }
 
-    let notificationSent: { whatsapp: boolean; email: boolean } | undefined;
+    let notificationSent:
+      | {
+          whatsapp: boolean;
+          email: boolean;
+          whatsappError?: string | null;
+          emailError?: string | null;
+        }
+      | undefined;
     if (dto.notifyOnCreate === true) {
       notificationSent = { whatsapp: false, email: false };
       try {
@@ -445,6 +452,8 @@ export class MeetingsService {
         notificationSent = {
           whatsapp: result.whatsappSent,
           email: result.emailSent,
+          whatsappError: result.whatsappError,
+          emailError: result.emailError,
         };
         meeting = await this.enrich(data as MeetingRow);
       } catch (err) {
@@ -452,6 +461,12 @@ export class MeetingsService {
         this.logger.warn(
           `notifyOnCreate failed id=${meeting.id}: ${message} — RDV conservé`,
         );
+        notificationSent = {
+          whatsapp: false,
+          email: false,
+          whatsappError: message,
+          emailError: null,
+        };
       }
     }
 
