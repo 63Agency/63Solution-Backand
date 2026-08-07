@@ -44,7 +44,8 @@ export type MeetingRemindersStatus = {
 };
 
 export type MeetingMember = {
-  userId: string | null;
+  /** Id lead ClickUp (text), pas un user interne. */
+  leadId: string | null;
   name: string;
   phone: string | null;
   email: string | null;
@@ -53,7 +54,7 @@ export type MeetingMember = {
 export type MeetingMemberRow = {
   id: string;
   meeting_id: string;
-  user_id: string | null;
+  lead_id: string | null;
   name: string;
   phone: string | null;
   email: string | null;
@@ -102,7 +103,7 @@ export type Meeting = {
   contactName: string;
   contactPhone: string | null;
   contactEmail: string | null;
-  /** Staff interne (owner, assistant, …) — distinct du contact client/lead. */
+  /** Participants côté client (autres leads) — distinct du contact principal. */
   members: MeetingMember[];
   status: MeetingStatus;
   reminderWhatsappSent: boolean;
@@ -117,4 +118,9 @@ export type Meeting = {
   meetSpace: string | null;
   createdAt: string;
   updatedAt: string;
+  /** Présent si notifyOnCreate a été demandé à la création. */
+  notificationSent?: {
+    whatsapp: boolean;
+    email: boolean;
+  };
 };

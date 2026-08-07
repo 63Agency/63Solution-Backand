@@ -3,7 +3,6 @@ import {
   IsEmail,
   IsOptional,
   IsString,
-  IsUUID,
   MaxLength,
   MinLength,
 } from 'class-validator';
@@ -13,11 +12,14 @@ function emptyToUndefined(v: unknown): unknown {
   return v;
 }
 
+/** Participant côté client (autre lead), distinct du contact principal. */
 export class MeetingMemberDto {
+  /** Id lead ClickUp (text) — optionnel. */
   @IsOptional()
   @Transform(({ value }) => emptyToUndefined(value))
-  @IsUUID('4', { message: 'userId invalide' })
-  userId?: string;
+  @IsString({ message: 'leadId invalide' })
+  @MaxLength(128, { message: 'leadId trop long' })
+  leadId?: string;
 
   @IsString({ message: 'members[].name requis' })
   @MinLength(1, { message: 'members[].name requis' })

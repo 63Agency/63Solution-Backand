@@ -32,6 +32,19 @@ type DueJob = MeetingReminderRow & {
 type WhatsappRecipient = { phone: string; name: string };
 type EmailRecipient = { email: string; name: string };
 
+/** Fenêtre anti-doublon notifyOnCreate ↔ send-reminder (front enchaîne les deux). */
+const MANUAL_IDEMPOTENCY_MS = 5 * 60 * 1000;
+
+function recentlyManualSent(
+  sentAt: string | null | undefined,
+  channelAlreadySent: boolean,
+): boolean {
+  if (!channelAlreadySent || !sentAt) return false;
+  const t = Date.parse(sentAt);
+  if (Number.isNaN(t)) return false;
+  return Date.now() - t < MANUAL_IDEMPOTENCY_MS;
+}
+
 function meetingWhatsappRecipients(meeting: Meeting): WhatsappRecipient[] {
   const seen = new Set<string>();
   const out: WhatsappRecipient[] = [];
@@ -301,9 +314,41 @@ export class MeetingsReminderService {
   }
 
   /**
+   * Confirmation immédiate à la création (notifyOnCreate).
+   * Même fan-out que le rappel manuel — ne touche PAS aux jobs auto 2d/24h/2h.
+   */
+  async sendCreateConfirmation(
+    meeting: Meeting,
+  ): Promise<{ whatsappSent: boolean; emailSent: boolean; failures: number }> {
+    if (meeting.status !== 'scheduled') {
+      return { whatsappSent: false, emailSent: false, failures: 0 };
+    }
+
+    const result = await this.sendManualChannelsNow(meeting, {
+      whatsapp: true,
+      email: true,
+    });
+
+    if (result.whatsappSent || result.emailSent) {
+      await this.meetings.markManualReminderSent(meeting.id, {
+        whatsapp: result.whatsappSent,
+        email: result.emailSent,
+      });
+    }
+
+    this.logger.log(
+      `[MeetingsReminder] create-confirm id=${meeting.id} whatsapp=${result.whatsappSent} email=${result.emailSent} failed=${result.failures} — jobs auto inchangés`,
+    );
+
+    return result;
+  }
+
+  /**
    * Envoi manuel immédiat (bouton admin) — indépendant du scheduler.
    * N'altère JAMAIS les jobs auto (remindersStatus reste pending/sent selon le cron).
    * Avec channel (et offset optionnel) → ce canal seul ; sans body → tous les canaux dispo.
+   * Idempotent si une confirmation / rappel manuel a déjà été envoyé dans la fenêtre courte
+   * (évite le double envoi notifyOnCreate + send-reminder).
    */
   async sendReminderForMeetingId(
     id: string,
@@ -317,6 +362,7 @@ export class MeetingsReminderService {
     emailSent: boolean;
     failures: number;
     meeting: Meeting;
+    skipped?: { whatsapp: boolean; email: boolean };
   }> {
     const meeting = await this.meetings.findById(id);
     let whatsappSent = false;
@@ -336,18 +382,38 @@ export class MeetingsReminderService {
       !options.channel || options.channel === 'whatsapp';
     const wantEmail = !options.channel || options.channel === 'email';
 
+    // Idempotence courte : skip canal déjà envoyé récemment (notifyOnCreate / manuel).
+    const skipWhatsapp =
+      wantWhatsapp &&
+      recentlyManualSent(
+        meeting.manualReminderSentAt,
+        meeting.manualReminderWhatsappSent,
+      );
+    const skipEmail =
+      wantEmail &&
+      recentlyManualSent(
+        meeting.manualReminderSentAt,
+        meeting.manualReminderEmailSent,
+      );
+
+    if (skipWhatsapp || skipEmail) {
+      this.logger.log(
+        `[MeetingsReminder] idempotent skip id=${id} whatsapp=${skipWhatsapp} email=${skipEmail}`,
+      );
+    }
+
     const result = await this.sendManualChannelsNow(meeting, {
-      whatsapp: wantWhatsapp,
-      email: wantEmail,
+      whatsapp: wantWhatsapp && !skipWhatsapp,
+      email: wantEmail && !skipEmail,
     });
-    whatsappSent = result.whatsappSent;
-    emailSent = result.emailSent;
+    whatsappSent = result.whatsappSent || skipWhatsapp;
+    emailSent = result.emailSent || skipEmail;
     failures = result.failures;
 
-    if (whatsappSent || emailSent) {
+    if (result.whatsappSent || result.emailSent) {
       await this.meetings.markManualReminderSent(meeting.id, {
-        whatsapp: whatsappSent,
-        email: emailSent,
+        whatsapp: result.whatsappSent,
+        email: result.emailSent,
       });
     }
 
@@ -359,6 +425,7 @@ export class MeetingsReminderService {
       whatsappSent,
       emailSent,
       failures,
+      skipped: { whatsapp: skipWhatsapp, email: skipEmail },
       meeting: await this.meetings.findById(id),
     };
   }

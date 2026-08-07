@@ -40,7 +40,7 @@ import {
 
 const ACTIVE_REMINDER_STATUSES: MeetingStatus[] = ['scheduled'];
 
-const MEMBER_SELECT = 'id, meeting_id, user_id, name, phone, email, created_at';
+const MEMBER_SELECT = 'id, meeting_id, lead_id, name, phone, email, created_at';
 
 function clean(value: string | undefined | null): string {
   return (value ?? '').trim();
@@ -48,7 +48,7 @@ function clean(value: string | undefined | null): string {
 
 function mapMember(row: MeetingMemberRow): MeetingMember {
   return {
-    userId: row.user_id ? String(row.user_id) : null,
+    leadId: row.lead_id ? String(row.lead_id) : null,
     name: String(row.name ?? ''),
     phone: row.phone ? String(row.phone) : null,
     email: row.email ? String(row.email) : null,
@@ -191,7 +191,7 @@ export class MeetingsService {
         });
       }
       members.push({
-        userId: item.userId?.trim() || null,
+        leadId: item.leadId?.trim() || null,
         name,
         phone,
         email,
@@ -222,7 +222,7 @@ export class MeetingsService {
 
     const rows = members.map((m) => ({
       meeting_id: meetingId,
-      user_id: m.userId,
+      lead_id: m.leadId,
       name: m.name,
       phone: m.phone,
       email: m.email,
@@ -437,10 +437,31 @@ export class MeetingsService {
       }
     }
 
+    let notificationSent: { whatsapp: boolean; email: boolean } | undefined;
+    if (dto.notifyOnCreate === true) {
+      notificationSent = { whatsapp: false, email: false };
+      try {
+        const result = await this.reminderJobs.sendCreateConfirmation(meeting);
+        notificationSent = {
+          whatsapp: result.whatsappSent,
+          email: result.emailSent,
+        };
+        meeting = await this.enrich(data as MeetingRow);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.logger.warn(
+          `notifyOnCreate failed id=${meeting.id}: ${message} — RDV conservé`,
+        );
+      }
+    }
+
     this.logger.log(
-      `Meeting created id=${meeting.id} meet=${meet?.meetLink ? 'yes' : 'no'} members=${savedMembers.length}`,
+      `Meeting created id=${meeting.id} meet=${meet?.meetLink ? 'yes' : 'no'} members=${savedMembers.length} notifyOnCreate=${dto.notifyOnCreate === true}`,
     );
-    return meeting;
+
+    return notificationSent
+      ? { ...meeting, notificationSent }
+      : meeting;
   }
 
   async saveMeetLink(

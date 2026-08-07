@@ -59,11 +59,6 @@ export function isWhatsappAdminApiAllowed(
     return true;
   }
 
-  // Liste équipe (picker membres RDV) — lecture seule.
-  if (normalized === '/users' && verb === 'GET') {
-    return true;
-  }
-
   for (const prefix of WHATSAPP_ADMIN_API_PREFIXES) {
     if (normalized === prefix || normalized.startsWith(`${prefix}/`)) {
       return true;
