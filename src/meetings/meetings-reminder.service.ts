@@ -457,6 +457,9 @@ export class MeetingsReminderService {
           whatsappSent = true;
         } else {
           failures += 1;
+          this.logger.warn(
+            `[MeetingsReminder] manual whatsapp aucun envoi id=${current.id} recipients=${waRecipients.length} meetLink=${current.meetLink ? 'yes' : 'no'}`,
+          );
         }
       } catch (err) {
         failures += 1;
@@ -465,6 +468,10 @@ export class MeetingsReminderService {
           `[MeetingsReminder] manual whatsapp failed id=${current.id}: ${message}`,
         );
       }
+    } else if (channels.whatsapp && waRecipients.length === 0) {
+      this.logger.warn(
+        `[MeetingsReminder] manual whatsapp skip id=${meeting.id} — pas de téléphone (contact/members)`,
+      );
     }
 
     if (channels.email && emailRecipients.length > 0) {
@@ -628,22 +635,38 @@ export class MeetingsReminderService {
   }
 
   private async sendWhatsappReminder(meeting: Meeting): Promise<boolean> {
-    const meetLink = meeting.meetLink?.trim() || '';
-    if (!meetLink) {
+    const recipients = meetingWhatsappRecipients(meeting);
+    if (recipients.length === 0) {
       this.logger.warn(
-        `[MeetingsReminder] WhatsApp non envoyé id=${meeting.id} — meet_link absent`,
+        `[MeetingsReminder] WhatsApp skip id=${meeting.id} — aucun téléphone`,
       );
       return false;
     }
 
-    const recipients = meetingWhatsappRecipients(meeting);
-    if (recipients.length === 0) return false;
-
+    // Template meeting_reminder_date (fr):
+    // Bonjour {{1}}, … le {{2}} à {{3}}. … lien : {{4}}
     const { date, time } = formatMeetingDate(meeting.meetingDate);
+    const meetLink =
+      meeting.meetLink?.trim() ||
+      'Lien Google Meet bientôt disponible';
+
+    if (!meeting.meetLink?.trim()) {
+      this.logger.warn(
+        `[MeetingsReminder] WhatsApp id=${meeting.id} — meet_link absent, envoi avec placeholder`,
+      );
+    }
+
     let anySent = false;
 
     for (const recipient of recipients) {
-      const prenom = firstNameOnly(recipient.name);
+      const prenom = firstNameOnly(recipient.name) || 'Client';
+      const params = [
+        prenom,
+        date || '—',
+        time || '—',
+        meetLink,
+      ].map((t) => t.trim() || '—');
+
       try {
         await this.meta.sendTemplateMessage(
           recipient.phone,
@@ -652,16 +675,14 @@ export class MeetingsReminderService {
           [
             {
               type: 'body',
-              parameters: [
-                { type: 'text', text: prenom },
-                { type: 'text', text: date },
-                { type: 'text', text: time },
-                { type: 'text', text: meetLink },
-              ],
+              parameters: params.map((text) => ({ type: 'text', text })),
             },
           ],
         );
         anySent = true;
+        this.logger.log(
+          `[MeetingsReminder] WhatsApp OK id=${meeting.id} to=${recipient.phone}`,
+        );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         this.logger.warn(
