@@ -1,4 +1,5 @@
 import { forwardRef, HttpException, Inject, Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Cron } from '@nestjs/schedule';
 import { MailerService } from '../common/mailer/mailer.service';
 import { SupabaseService } from '../supabase/supabase.service';
@@ -46,7 +47,7 @@ type ChannelSendResult = {
 /** Fenêtre anti-doublon notifyOnCreate ↔ send-reminder (front enchaîne les deux). */
 const MANUAL_IDEMPOTENCY_MS = 5 * 60 * 1000;
 
-const MEETING_WA_TEMPLATE = 'meeting_reminder_date';
+const DEFAULT_MEETING_WA_TEMPLATE = 'meeting_reminder_util';
 const MEETING_WA_LANG = 'fr';
 
 function extractErrorMessage(err: unknown): string {
@@ -124,7 +125,14 @@ export class MeetingsReminderService {
     private readonly meta: MetaService,
     private readonly mailer: MailerService,
     private readonly googleMeet: GoogleMeetService,
+    private readonly config: ConfigService,
   ) {}
+
+  /** Meta template name — override via WA_MEETING_REMINDER_TEMPLATE (no rebuild needed). */
+  private get meetingWaTemplate(): string {
+    const fromEnv = this.config.get<string>('WA_MEETING_REMINDER_TEMPLATE')?.trim();
+    return fromEnv || DEFAULT_MEETING_WA_TEMPLATE;
+  }
 
   /** Every 5 minutes — process pending reminder jobs. */
   @Cron('0 */5 * * * *')
@@ -358,7 +366,7 @@ export class MeetingsReminderService {
         whatsappError: 'meeting non scheduled',
         emailError: null,
         whatsappMetaIds: [],
-        whatsappTemplate: `${MEETING_WA_TEMPLATE}/${MEETING_WA_LANG}`,
+        whatsappTemplate: `${this.meetingWaTemplate}/${MEETING_WA_LANG}`,
         whatsappWarning: null,
       };
     }
@@ -408,7 +416,7 @@ export class MeetingsReminderService {
     meeting: Meeting;
   }> {
     const meeting = await this.meetings.findById(id);
-    const templateLabel = `${MEETING_WA_TEMPLATE}/${MEETING_WA_LANG}`;
+    const templateLabel = `${this.meetingWaTemplate}/${MEETING_WA_LANG}`;
 
     if (meeting.status !== 'scheduled') {
       return {
@@ -559,7 +567,7 @@ export class MeetingsReminderService {
       whatsappError,
       emailError,
       whatsappMetaIds,
-      whatsappTemplate: `${MEETING_WA_TEMPLATE}/${MEETING_WA_LANG}`,
+      whatsappTemplate: `${this.meetingWaTemplate}/${MEETING_WA_LANG}`,
       whatsappWarning,
     };
   }
@@ -733,8 +741,9 @@ export class MeetingsReminderService {
       };
     }
 
-    // Template APPROVED: meeting_reminder_date (fr) — category MARKETING (delivery may be filtered).
-    // Bonjour {{1}}, … le {{2}} à {{3}}. … lien : {{4}}  ({{4}} must be an https URL)
+    // Template: WA_MEETING_REMINDER_TEMPLATE (default meeting_reminder_util) / fr
+    // Body vars: {{1}} nom, {{2}} date, {{3}} heure, {{4}} lien Meet (https URL)
+    const templateName = this.meetingWaTemplate;
     const { date, time } = formatMeetingDate(meeting.meetingDate);
     let meetLink = meeting.meetLink?.trim() || '';
     if (!/^https:\/\//i.test(meetLink)) {
@@ -743,16 +752,12 @@ export class MeetingsReminderService {
       meetLink = refreshed.meetLink?.trim() || '';
     }
     if (!/^https:\/\//i.test(meetLink)) {
-      const error =
-        'meet_link manquant ou invalide — le template meeting_reminder_date exige une URL https pour {{4}}';
+      const error = `meet_link manquant ou invalide — le template ${templateName} exige une URL https pour {{4}}`;
       this.logger.warn(
         `[MeetingsReminder] WhatsApp skip id=${meeting.id} — ${error}`,
       );
       return { sent: false, error, metaIds: [], warning: null };
     }
-
-    const warning =
-      'Template meeting_reminder_date est category=MARKETING (pas UTILITY). Meta peut accepter (wamid) sans livrer sur le téléphone. Créer/reclasser le template en UTILITY dans Meta Business.';
 
     let anySent = false;
     let lastError: string | null = null;
@@ -769,13 +774,13 @@ export class MeetingsReminderService {
       ].map((t) => t.trim() || '-');
 
       this.logger.log(
-        `[WA SEND] meeting reminder prep to="${recipient.phone}" (from contactPhone/members via normalizeMeetingPhone) template=${MEETING_WA_TEMPLATE} meetingId=${meeting.id} params=${JSON.stringify(params)}`,
+        `[WA SEND] meeting reminder prep to="${recipient.phone}" (from contactPhone/members via normalizeMeetingPhone) template=${templateName} meetingId=${meeting.id} params=${JSON.stringify(params)}`,
       );
 
       try {
         const result = await this.meta.sendTemplateMessage(
           recipient.phone,
-          MEETING_WA_TEMPLATE,
+          templateName,
           MEETING_WA_LANG,
           [
             {
@@ -787,7 +792,7 @@ export class MeetingsReminderService {
         anySent = true;
         if (result.whatsappMessageId) metaIds.push(result.whatsappMessageId);
         this.logger.log(
-          `[MeetingsReminder] WhatsApp OK (Meta accepted) id=${meeting.id} to=${recipient.phone} wamid=${result.whatsappMessageId ?? '-'} — NOTE: template category=MARKETING`,
+          `[MeetingsReminder] WhatsApp OK (Meta accepted) id=${meeting.id} to=${recipient.phone} wamid=${result.whatsappMessageId ?? '-'} template=${templateName}`,
         );
       } catch (err) {
         lastError = extractErrorMessage(err);
@@ -801,7 +806,7 @@ export class MeetingsReminderService {
       sent: anySent,
       error: anySent ? null : lastError || 'envoi WhatsApp échoué',
       metaIds,
-      warning: anySent ? warning : null,
+      warning: null,
     };
   }
 

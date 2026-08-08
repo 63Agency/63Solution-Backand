@@ -110,7 +110,7 @@ export class MeetingsController {
 
   /**
    * Envoi manuel immédiat (admin + admin_whatsapp).
-   * Template Meta `meeting_reminder_date` (fr) — hors fenêtre 24h.
+   * Template Meta `WA_MEETING_REMINDER_TEMPLATE` (défaut `meeting_reminder_util`, fr) — hors fenêtre 24h.
    * Body optionnel : `{ "channel": "whatsapp"|"email" }`.
    * Réponse : `{ ok, whatsappSent, emailSent, whatsappError, emailError, meeting }`.
    */

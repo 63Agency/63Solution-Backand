@@ -345,7 +345,7 @@ export class MetaService {
     const languageCode = language.trim() || 'fr';
 
     // Prefer explicit body components when they contain real text params
-    // (e.g. meeting_reminder_date with {{1}} {{2}} {{3}}).
+    // (e.g. meeting_reminder_util with {{1}}…{{4}}).
     // Otherwise fall back to variable1. Empty / "{{n}}" → components: []
     // to avoid Meta #132000 on no-variable templates.
     const bodyParamsFromComponents = (_components ?? [])
