@@ -118,6 +118,9 @@ function meetingEmailRecipients(meeting: Meeting): EmailRecipient[] {
 export class MeetingsReminderService {
   private readonly logger = new Logger(MeetingsReminderService.name);
 
+  /** Empêche un double create-confirm concurrent pour le même meetingId. */
+  private readonly createConfirmInFlight = new Set<string>();
+
   constructor(
     @Inject(forwardRef(() => MeetingsService))
     private readonly meetings: MeetingsService,
@@ -231,7 +234,7 @@ export class MeetingsReminderService {
     }
 
     this.logger.log(
-      `[MeetingsReminder] scheduled meetingId=${meeting.id} jobs=${rows.length} resetSent=${options.resetSent === true}`,
+      `[MeetingsReminder] scheduled meetingId=${meeting.id} jobs=${rows.length} resetSent=${options.resetSent === true} (jobs only — no create-confirm send)`,
     );
   }
 
@@ -355,39 +358,100 @@ export class MeetingsReminderService {
 
   /**
    * Confirmation immédiate à la création (notifyOnCreate).
-   * Même fan-out que le rappel manuel — ne touche PAS aux jobs auto 2d/24h/2h.
+   * Seul point d’envoi à la création — scheduleJobsForMeeting ne fait que les jobs 2d/24h/2h.
+   * Idempotent : in-flight lock + flags manual_reminder_* (même meetingId → 1 seul envoi).
    */
   async sendCreateConfirmation(meeting: Meeting): Promise<ChannelSendResult> {
-    if (meeting.status !== 'scheduled') {
-      return {
-        whatsappSent: false,
-        emailSent: false,
-        failures: 0,
-        whatsappError: 'meeting non scheduled',
-        emailError: null,
-        whatsappMetaIds: [],
-        whatsappTemplate: `${this.meetingWaTemplate}/${MEETING_WA_LANG}`,
-        whatsappWarning: null,
-      };
-    }
-
-    const result = await this.sendManualChannelsNow(meeting, {
-      whatsapp: true,
-      email: true,
+    const templateLabel = `${this.meetingWaTemplate}/${MEETING_WA_LANG}`;
+    const empty = (
+      extra: Partial<ChannelSendResult> = {},
+    ): ChannelSendResult => ({
+      whatsappSent: false,
+      emailSent: false,
+      failures: 0,
+      whatsappError: null,
+      emailError: null,
+      whatsappMetaIds: [],
+      whatsappTemplate: templateLabel,
+      whatsappWarning: null,
+      ...extra,
     });
 
-    if (result.whatsappSent || result.emailSent) {
-      await this.meetings.markManualReminderSent(meeting.id, {
-        whatsapp: result.whatsappSent,
-        email: result.emailSent,
+    if (meeting.status !== 'scheduled') {
+      return empty({ whatsappError: 'meeting non scheduled' });
+    }
+
+    if (this.createConfirmInFlight.has(meeting.id)) {
+      this.logger.log(
+        `[MeetingsReminder] create-confirm skip id=${meeting.id} reason=in-flight`,
+      );
+      return empty({
+        whatsappError: 'create-confirm déjà en cours',
+        emailError: 'create-confirm déjà en cours',
       });
     }
 
-    this.logger.log(
-      `[MeetingsReminder] create-confirm id=${meeting.id} whatsapp=${result.whatsappSent} email=${result.emailSent} waErr=${result.whatsappError ?? '-'} emailErr=${result.emailError ?? '-'} — jobs auto inchangés`,
+    // Relecture DB : un send-reminder / create-confirm parallèle a peut-être déjà envoyé.
+    const fresh = await this.meetings.findById(meeting.id);
+    const skipWhatsapp = recentlyManualSent(
+      fresh.manualReminderSentAt,
+      fresh.manualReminderWhatsappSent,
+    );
+    const skipEmail = recentlyManualSent(
+      fresh.manualReminderSentAt,
+      fresh.manualReminderEmailSent,
     );
 
-    return result;
+    if (skipWhatsapp && skipEmail) {
+      this.logger.log(
+        `[MeetingsReminder] create-confirm skip id=${meeting.id} reason=already-sent`,
+      );
+      return empty({
+        whatsappSent: true,
+        emailSent: true,
+        whatsappError: null,
+        emailError: null,
+      });
+    }
+
+    if (skipWhatsapp || skipEmail) {
+      this.logger.log(
+        `[MeetingsReminder] create-confirm partial skip id=${meeting.id} whatsapp=${skipWhatsapp} email=${skipEmail}`,
+      );
+    }
+
+    this.createConfirmInFlight.add(meeting.id);
+    try {
+      const result = await this.sendManualChannelsNow(fresh, {
+        whatsapp: !skipWhatsapp,
+        email: !skipEmail,
+      });
+
+      if (result.whatsappSent || result.emailSent) {
+        await this.meetings.markManualReminderSent(meeting.id, {
+          whatsapp: result.whatsappSent,
+          email: result.emailSent,
+        });
+      }
+
+      const whatsappSent = result.whatsappSent || skipWhatsapp;
+      const emailSent = result.emailSent || skipEmail;
+
+      this.logger.log(
+        `[MeetingsReminder] create-confirm id=${meeting.id} whatsapp=${whatsappSent} email=${emailSent} waErr=${result.whatsappError ?? '-'} emailErr=${result.emailError ?? '-'} — jobs auto inchangés`,
+      );
+
+      return {
+        ...result,
+        whatsappSent,
+        emailSent,
+        whatsappError: skipWhatsapp ? null : result.whatsappError,
+        emailError: skipEmail ? null : result.emailError,
+        whatsappTemplate: templateLabel,
+      };
+    } finally {
+      this.createConfirmInFlight.delete(meeting.id);
+    }
   }
 
   /**
@@ -437,25 +501,31 @@ export class MeetingsReminderService {
       !options.channel || options.channel === 'whatsapp';
     const wantEmail = !options.channel || options.channel === 'email';
 
-    // Idempotence courte sauf force=true (bouton « Envoyer maintenant »).
+    // Pendant create-confirm en cours : ne pas doubler (front enchaîne souvent send-reminder).
+    const createConfirmBusy =
+      !options.force && this.createConfirmInFlight.has(id);
+
+    // Idempotence courte sauf force=true (bouton « Envoyer maintenant » avec force).
     const skipWhatsapp =
-      !options.force &&
-      wantWhatsapp &&
-      recentlyManualSent(
-        meeting.manualReminderSentAt,
-        meeting.manualReminderWhatsappSent,
-      );
+      createConfirmBusy ||
+      (!options.force &&
+        wantWhatsapp &&
+        recentlyManualSent(
+          meeting.manualReminderSentAt,
+          meeting.manualReminderWhatsappSent,
+        ));
     const skipEmail =
-      !options.force &&
-      wantEmail &&
-      recentlyManualSent(
-        meeting.manualReminderSentAt,
-        meeting.manualReminderEmailSent,
-      );
+      createConfirmBusy ||
+      (!options.force &&
+        wantEmail &&
+        recentlyManualSent(
+          meeting.manualReminderSentAt,
+          meeting.manualReminderEmailSent,
+        ));
 
     if (skipWhatsapp || skipEmail) {
       this.logger.log(
-        `[MeetingsReminder] idempotent skip id=${id} whatsapp=${skipWhatsapp} email=${skipEmail}`,
+        `[MeetingsReminder] idempotent skip id=${id} whatsapp=${skipWhatsapp} email=${skipEmail} createConfirmBusy=${createConfirmBusy}`,
       );
     }
 

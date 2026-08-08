@@ -111,7 +111,8 @@ export class MeetingsController {
   /**
    * Envoi manuel immédiat (admin + admin_whatsapp).
    * Template Meta `WA_MEETING_REMINDER_TEMPLATE` (défaut `meeting_reminder_util`, fr) — hors fenêtre 24h.
-   * Body optionnel : `{ "channel": "whatsapp"|"email" }`.
+   * Body optionnel : `{ "channel": "whatsapp"|"email", "force": true }`.
+   * Sans `force`, skip si confirmation récente (notifyOnCreate / send-reminder < 5 min).
    * Réponse : `{ ok, whatsappSent, emailSent, whatsappError, emailError, meeting }`.
    */
   @Post(':id/send-reminder')
@@ -122,8 +123,8 @@ export class MeetingsController {
   ) {
     assertCanAccessMeetings(req.user);
     return this.reminders.sendReminderForMeetingId(id, {
-      // force=true : le bouton admin retente toujours (pas d’idempotence).
-      force: true,
+      // force only when explicitly requested — default respects create-confirm idempotency.
+      force: dto?.force === true,
       channel: dto?.channel,
       offset: dto?.offset,
     });

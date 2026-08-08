@@ -1,5 +1,5 @@
 import { Transform } from 'class-transformer';
-import { IsIn, IsOptional } from 'class-validator';
+import { IsBoolean, IsIn, IsOptional } from 'class-validator';
 import {
   REMINDER_CHANNELS,
   REMINDER_OFFSETS,
@@ -24,4 +24,9 @@ export class SendReminderDto {
     message: 'offset doit être 2d | 24h | 2h',
   })
   offset?: '2d' | '24h' | '2h';
+
+  /** true = ignorer l’idempotence (re-envoyer même après notifyOnCreate récent). */
+  @IsOptional()
+  @IsBoolean({ message: 'force doit être un booléen' })
+  force?: boolean;
 }

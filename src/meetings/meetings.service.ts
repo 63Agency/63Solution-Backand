@@ -425,6 +425,7 @@ export class MeetingsService {
 
     let meeting = mapMeetingBase(data as MeetingRow, [], savedMembers);
 
+    // 1) Jobs auto 2d/24h/2h uniquement — aucun envoi immédiat ici.
     if (ACTIVE_REMINDER_STATUSES.includes(meeting.status)) {
       try {
         await this.reminderJobs.scheduleJobsForMeeting(meeting, reminders);
@@ -437,6 +438,11 @@ export class MeetingsService {
       }
     }
 
+    this.logger.log(
+      `Meeting created id=${meeting.id} meet=${meet?.meetLink ? 'yes' : 'no'} members=${savedMembers.length} notifyOnCreate=${dto.notifyOnCreate === true}`,
+    );
+
+    // 2) Seul point d’envoi de la confirmation immédiate (WA + email).
     let notificationSent:
       | {
           whatsapp: boolean;
@@ -469,10 +475,6 @@ export class MeetingsService {
         };
       }
     }
-
-    this.logger.log(
-      `Meeting created id=${meeting.id} meet=${meet?.meetLink ? 'yes' : 'no'} members=${savedMembers.length} notifyOnCreate=${dto.notifyOnCreate === true}`,
-    );
 
     return notificationSent
       ? { ...meeting, notificationSent }
