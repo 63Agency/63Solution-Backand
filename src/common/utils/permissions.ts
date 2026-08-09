@@ -1,4 +1,8 @@
-import { isFullAdmin, type AppRoute } from './roles';
+import {
+  isFixedMeeting,
+  isFullAdmin,
+  type AppRoute,
+} from './roles';
 
 export type LeadsPermissions = {
   list: boolean;
@@ -31,6 +35,14 @@ const FULL_LEADS_PERMISSIONS: LeadsPermissions = {
   sync: true,
   meta: true,
   stats: true,
+};
+
+const NO_LEADS_PERMISSIONS: LeadsPermissions = {
+  list: false,
+  detail: false,
+  sync: false,
+  meta: false,
+  stats: false,
 };
 
 const FULL_ADMIN_PERMISSIONS: RolePermissions = {
@@ -72,10 +84,26 @@ const WHATSAPP_ADMIN_PERMISSIONS: RolePermissions = {
   upload: false,
 };
 
+/** Rôle calendrier uniquement : page /dashboard/calendrier + API meetings. */
+const FIXED_MEETING_PERMISSIONS: RolePermissions = {
+  pages: ['/dashboard/calendrier'],
+  whatsapp: false,
+  leads: false,
+  leadsPermissions: NO_LEADS_PERMISSIONS,
+  dashboard: false,
+  clients: false,
+  devis: false,
+  factures: false,
+  propositions: false,
+  meetings: true,
+  users: false,
+  upload: false,
+};
+
 export function getRolePermissions(
   role: string | null | undefined,
 ): RolePermissions {
-  return isFullAdmin(role)
-    ? FULL_ADMIN_PERMISSIONS
-    : WHATSAPP_ADMIN_PERMISSIONS;
+  if (isFullAdmin(role)) return FULL_ADMIN_PERMISSIONS;
+  if (isFixedMeeting(role)) return FIXED_MEETING_PERMISSIONS;
+  return WHATSAPP_ADMIN_PERMISSIONS;
 }

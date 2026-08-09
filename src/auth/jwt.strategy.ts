@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { SupabaseService } from '../supabase/supabase.service';
+import { normalizeApiRole } from '../common/utils/roles';
 import { USER_PUBLIC_COLUMNS } from '../common/utils/user-response';
 import type { AppUser } from './types/app-user';
 
@@ -38,7 +39,8 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     return {
       id: data.id as string,
       email: data.email as string,
-      role: (data.role as string) ?? 'user',
+      // Toujours le slug API (admin | admin_whatsapp | fixed_meeting), jamais un label UI.
+      role: normalizeApiRole(data.role as string),
       prenom: (data.prenom as string | null) ?? null,
       nom: (data.nom as string | null) ?? null,
       telephone: (data.telephone as string | null) ?? null,

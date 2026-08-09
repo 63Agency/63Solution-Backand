@@ -1,0 +1,8 @@
+-- Rôles API (slug snake_case uniquement — jamais un label UI).
+--
+--   admin           → accès complet (users, dashboard, WhatsApp, Leads, Calendrier, …)
+--   admin_whatsapp  → WhatsApp + Leads + Calendrier
+--   fixed_meeting   → Calendrier uniquement (pages = ["/dashboard/calendrier"])
+--
+-- Création : POST /users avec role = "admin" | "admin_whatsapp" | "fixed_meeting"
+-- (pas "Administrateur", pas "Fixed Meeting").

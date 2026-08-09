@@ -10,14 +10,14 @@ import {
 export class CreateUserDto {
   @IsString({ message: 'prénom requis' })
   @IsNotEmpty({ message: 'prénom requis' })
-  prenom: string;
+  prenom!: string;
 
   @IsString({ message: 'nom requis' })
   @IsNotEmpty({ message: 'nom requis' })
-  nom: string;
+  nom!: string;
 
   @IsEmail({}, { message: 'email invalide' })
-  email: string;
+  email!: string;
 
   @IsOptional()
   @IsString()
@@ -29,10 +29,10 @@ export class CreateUserDto {
 
   @IsString({ message: 'mot de passe requis' })
   @MinLength(8, { message: 'mot de passe: au moins 8 caractères' })
-  password: string;
+  password!: string;
 
-  @IsIn(['admin', 'admin_whatsapp'], {
-    message: 'role doit être admin ou admin_whatsapp',
+  @IsIn(['admin', 'admin_whatsapp', 'fixed_meeting'], {
+    message: 'role doit être admin, admin_whatsapp ou fixed_meeting',
   })
-  role: 'admin' | 'admin_whatsapp';
+  role!: 'admin' | 'admin_whatsapp' | 'fixed_meeting';
 }

@@ -126,12 +126,13 @@ export class UsersService {
     }
 
     const password_hash = await bcrypt.hash(dto.password, 10);
+    const role = normalizeApiRole(dto.role);
     const { data, error } = await sb
       .from('users')
       .insert({
         email,
         password_hash,
-        role: dto.role,
+        role,
         prenom,
         nom,
         telephone,

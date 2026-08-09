@@ -3,6 +3,7 @@ import type { AppUser } from '../../auth/types/app-user';
 import {
   canAccessLeads,
   canAccessMeetings,
+  isFixedMeeting,
   isFullAdmin,
   isWhatsappAdmin,
 } from './roles';
@@ -42,15 +43,23 @@ const WHATSAPP_ADMIN_API_PREFIXES = [
   '/auth/change-password',
 ] as const;
 
+/** Préfixes API autorisés pour le rôle fixed_meeting (calendrier uniquement). */
+const FIXED_MEETING_API_PREFIXES = [
+  '/meetings',
+  '/auth/me',
+  '/auth/change-password',
+] as const;
+
 function normalizeApiPath(path: string): string {
   const withoutQuery = path.split('?')[0] ?? path;
   const trimmed = withoutQuery.replace(/\/+$/, '');
   return trimmed || '/';
 }
 
-export function isWhatsappAdminApiAllowed(
+function isPathAllowed(
   method: string,
   path: string,
+  prefixes: readonly string[],
 ): boolean {
   const normalized = normalizeApiPath(path);
   const verb = method.toUpperCase();
@@ -59,7 +68,7 @@ export function isWhatsappAdminApiAllowed(
     return true;
   }
 
-  for (const prefix of WHATSAPP_ADMIN_API_PREFIXES) {
+  for (const prefix of prefixes) {
     if (normalized === prefix || normalized.startsWith(`${prefix}/`)) {
       return true;
     }
@@ -68,16 +77,46 @@ export function isWhatsappAdminApiAllowed(
   return false;
 }
 
+export function isWhatsappAdminApiAllowed(
+  method: string,
+  path: string,
+): boolean {
+  return isPathAllowed(method, path, WHATSAPP_ADMIN_API_PREFIXES);
+}
+
+export function isFixedMeetingApiAllowed(
+  method: string,
+  path: string,
+): boolean {
+  return isPathAllowed(method, path, FIXED_MEETING_API_PREFIXES);
+}
+
 export function assertWhatsappAdminApiAccess(
   user: AppUser,
   method: string,
   path: string,
 ): void {
-  if (!isWhatsappAdmin(user.role)) return;
+  // admin : aucun filtre d’API (GET/POST/DELETE /users, etc.).
+  if (isFullAdmin(user.role) || !isWhatsappAdmin(user.role)) return;
 
   if (!isWhatsappAdminApiAllowed(method, path)) {
     throw new ForbiddenException({
       message: 'Accès réservé aux pages WhatsApp, Leads et Calendrier.',
+    });
+  }
+}
+
+export function assertFixedMeetingApiAccess(
+  user: AppUser,
+  method: string,
+  path: string,
+): void {
+  // admin : non restreint. fixed_meeting : calendrier uniquement (pas Users / WhatsApp / Leads).
+  if (isFullAdmin(user.role) || !isFixedMeeting(user.role)) return;
+
+  if (!isFixedMeetingApiAllowed(method, path)) {
+    throw new ForbiddenException({
+      message: 'Accès réservé à la page Calendrier.',
     });
   }
 }
