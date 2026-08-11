@@ -69,6 +69,14 @@ export function canAccessMeetings(role: string | null | undefined): boolean {
   return r === 'admin' || r === 'admin_whatsapp' || r === 'fixed_meeting';
 }
 
+/** Mentionner l’équipe (assignedUserIds) : admin + admin_whatsapp uniquement. */
+export function canAssignMeetingUsers(
+  role: string | null | undefined,
+): boolean {
+  const r = normalizeApiRole(role);
+  return r === 'admin' || r === 'admin_whatsapp';
+}
+
 export function recommendedRoute(
   role: string | null | undefined,
 ): AppRoute {

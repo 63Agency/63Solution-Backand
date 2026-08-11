@@ -75,6 +75,16 @@ export class UpdateMeetingDto {
   @Type(() => MeetingMemberDto)
   members?: MeetingMemberDto[];
 
+  /**
+   * Remplace toute la liste assignees (staff). Absent = inchangé.
+   * Le créateur reste toujours inclus.
+   */
+  @IsOptional()
+  @IsArray({ message: 'assignedUserIds doit être un tableau' })
+  @ArrayMaxSize(100, { message: 'assignedUserIds max 100' })
+  @IsUUID('4', { each: true, message: 'assignedUserIds contient un id invalide' })
+  assignedUserIds?: string[];
+
   @IsOptional()
   @ValidateNested()
   @Type(() => MeetingRemindersDto)

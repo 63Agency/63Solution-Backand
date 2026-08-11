@@ -81,6 +81,11 @@ export function isWhatsappAdminApiAllowed(
   method: string,
   path: string,
 ): boolean {
+  const normalized = normalizeApiPath(path);
+  // Lecture seule pour le picker assignees (création / édition RDV).
+  if (normalized === '/users' && method.toUpperCase() === 'GET') {
+    return true;
+  }
   return isPathAllowed(method, path, WHATSAPP_ADMIN_API_PREFIXES);
 }
 

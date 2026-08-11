@@ -56,6 +56,12 @@ export class MeetingsController {
     return this.meetings.stats(req.user);
   }
 
+  /** Liste users pour le picker « Visible pour l’équipe » (assignedUserIds). */
+  @Get('assignable-users')
+  assignableUsers(@Req() req: { user: AppUser }) {
+    return this.meetings.listAssignableUsers(req.user);
+  }
+
   @Get('blocked-days')
   listBlockedDays(
     @Query() query: ListBlockedDaysQueryDto,
@@ -122,6 +128,8 @@ export class MeetingsController {
     @Body() dto?: SendReminderDto,
   ) {
     assertCanAccessMeetings(req.user);
+    // Visibilité assignees : pas de rappel sur un RDV non assigné.
+    await this.meetings.findByIdForUser(id, req.user);
     return this.reminders.sendReminderForMeetingId(id, {
       // force only when explicitly requested — default respects create-confirm idempotency.
       force: dto?.force === true,

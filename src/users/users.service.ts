@@ -8,7 +8,12 @@ import {
 import * as bcrypt from 'bcrypt';
 import type { AppUser } from '../auth/types/app-user';
 import { assertFullAdmin } from '../common/utils/access';
-import { isFullAdmin, normalizeApiRole, recommendedRoute } from '../common/utils/roles';
+import {
+  isFullAdmin,
+  isWhatsappAdmin,
+  normalizeApiRole,
+  recommendedRoute,
+} from '../common/utils/roles';
 import { getRolePermissions } from '../common/utils/permissions';
 import {
   mapUserToMe,
@@ -82,8 +87,17 @@ export class UsersService {
     };
   }
 
+  /**
+   * Liste équipe (lecture).
+   * admin + admin_whatsapp (picker assignees RDV).
+   * fixed_meeting → 403 (utiliser GET /meetings/assignable-users si besoin).
+   */
   async list(user: AppUser) {
-    this.assertAdmin(user);
+    if (!isFullAdmin(user.role) && !isWhatsappAdmin(user.role)) {
+      throw new ForbiddenException({
+        message: 'Accès à la liste des utilisateurs non autorisé.',
+      });
+    }
 
     const { data, error } = await this.supabase
       .getClient()

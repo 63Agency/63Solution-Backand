@@ -61,6 +61,21 @@ export type MeetingMemberRow = {
   created_at?: string;
 };
 
+/** Staff interne autorisé à voir le RDV (≠ members clients). */
+export type MeetingAssignee = {
+  userId: string;
+  prenom: string;
+  nom: string;
+  email: string;
+  role: string;
+};
+
+export type MeetingAssigneeRow = {
+  meeting_id: string;
+  user_id: string;
+  created_at?: string;
+};
+
 export type MeetingRow = {
   id: string;
   lead_id: string | null;
@@ -79,6 +94,7 @@ export type MeetingRow = {
   notes: string | null;
   meet_link: string | null;
   meet_space: string | null;
+  created_by?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -105,6 +121,11 @@ export type Meeting = {
   contactEmail: string | null;
   /** Participants côté client (autres leads) — distinct du contact principal. */
   members: MeetingMember[];
+  /** IDs users internes (visibilité calendrier). */
+  assignedUserIds: string[];
+  /** Détail staff assigné (≠ members). */
+  assignees: MeetingAssignee[];
+  createdBy: string | null;
   status: MeetingStatus;
   reminderWhatsappSent: boolean;
   reminderEmailSent: boolean;

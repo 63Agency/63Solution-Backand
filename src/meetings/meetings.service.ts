@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   forwardRef,
   Inject,
   Injectable,
@@ -9,6 +10,16 @@ import {
 } from '@nestjs/common';
 import type { AppUser } from '../auth/types/app-user';
 import { assertCanAccessMeetings, assertFullAdmin } from '../common/utils/access';
+import {
+  canAssignMeetingUsers,
+  isFixedMeeting,
+  normalizeApiRole,
+} from '../common/utils/roles';
+import {
+  USER_PUBLIC_COLUMNS,
+  mapUserToTeamItem,
+  type UserDbRow,
+} from '../common/utils/user-response';
 import { SupabaseService } from '../supabase/supabase.service';
 import type { CreateMeetingDto } from './dto/create-meeting.dto';
 import type { ListMeetingsQueryDto } from './dto/list-meetings-query.dto';
@@ -19,6 +30,8 @@ import { MeetingsBlockedDaysService } from './meetings-blocked-days.service';
 import { MeetingsReminderService } from './meetings-reminder.service';
 import type {
   Meeting,
+  MeetingAssignee,
+  MeetingAssigneeRow,
   MeetingMember,
   MeetingMemberRow,
   MeetingReminderRow,
@@ -41,6 +54,12 @@ import {
 const ACTIVE_REMINDER_STATUSES: MeetingStatus[] = ['scheduled'];
 
 const MEMBER_SELECT = 'id, meeting_id, lead_id, name, phone, email, created_at';
+const ASSIGNEE_SELECT = 'meeting_id, user_id, created_at';
+
+type AssigneesBundle = {
+  assignedUserIds: string[];
+  assignees: MeetingAssignee[];
+};
 
 function clean(value: string | undefined | null): string {
   return (value ?? '').trim();
@@ -59,6 +78,7 @@ function mapMeetingBase(
   r: MeetingRow,
   jobs: MeetingReminderRow[] = [],
   members: MeetingMember[] = [],
+  assignees: AssigneesBundle = { assignedUserIds: [], assignees: [] },
 ): Meeting {
   const reminders = normalizeRemindersConfig(
     (r.reminders as MeetingRemindersConfig | null) ?? undefined,
@@ -78,6 +98,9 @@ function mapMeetingBase(
     contactPhone: r.contact_phone ? String(r.contact_phone) : null,
     contactEmail: r.contact_email ? String(r.contact_email) : null,
     members,
+    assignedUserIds: assignees.assignedUserIds,
+    assignees: assignees.assignees,
+    createdBy: r.created_by ? String(r.created_by) : null,
     status: String(r.status ?? 'scheduled') as MeetingStatus,
     reminderWhatsappSent:
       legacy.reminderWhatsappSent || Boolean(r.reminder_whatsapp_sent),
@@ -99,7 +122,7 @@ function mapMeetingBase(
 }
 
 const SELECT_COLS =
-  'id, lead_id, title, meeting_date, contact_name, contact_phone, contact_email, status, reminder_whatsapp_sent, reminder_email_sent, reminders, manual_reminder_sent_at, manual_reminder_whatsapp_sent, manual_reminder_email_sent, notes, meet_link, meet_space, created_at, updated_at';
+  'id, lead_id, title, meeting_date, contact_name, contact_phone, contact_email, status, reminder_whatsapp_sent, reminder_email_sent, reminders, manual_reminder_sent_at, manual_reminder_whatsapp_sent, manual_reminder_email_sent, notes, meet_link, meet_space, created_by, created_at, updated_at';
 
 @Injectable()
 export class MeetingsService {
@@ -114,21 +137,28 @@ export class MeetingsService {
   ) {}
 
   private async enrich(row: MeetingRow): Promise<Meeting> {
-    const [jobs, members] = await Promise.all([
+    const [jobs, members, assignees] = await Promise.all([
       this.reminderJobs.listJobsForMeeting(row.id),
       this.loadMembersForMeeting(row.id),
+      this.loadAssigneesForMeeting(row.id),
     ]);
-    return mapMeetingBase(row, jobs, members);
+    return mapMeetingBase(row, jobs, members, assignees);
   }
 
   private async enrichMany(rows: MeetingRow[]): Promise<Meeting[]> {
     const ids = rows.map((r) => r.id);
-    const [jobsMap, membersMap] = await Promise.all([
+    const [jobsMap, membersMap, assigneesMap] = await Promise.all([
       this.reminderJobs.listJobsForMeetings(ids),
       this.loadMembersForMeetings(ids),
+      this.loadAssigneesForMeetings(ids),
     ]);
     return rows.map((r) =>
-      mapMeetingBase(r, jobsMap.get(r.id) ?? [], membersMap.get(r.id) ?? []),
+      mapMeetingBase(
+        r,
+        jobsMap.get(r.id) ?? [],
+        membersMap.get(r.id) ?? [],
+        assigneesMap.get(r.id) ?? { assignedUserIds: [], assignees: [] },
+      ),
     );
   }
 
@@ -154,9 +184,7 @@ export class MeetingsService {
       .order('created_at', { ascending: true });
 
     if (error) {
-      this.logger.warn(
-        `loadMembersForMeetings failed: ${error.message}`,
-      );
+      this.logger.warn(`loadMembersForMeetings failed: ${error.message}`);
       return map;
     }
 
@@ -165,6 +193,98 @@ export class MeetingsService {
       const list = map.get(mid) ?? [];
       list.push(mapMember(row));
       map.set(mid, list);
+    }
+    return map;
+  }
+
+  private async loadAssigneesForMeeting(
+    meetingId: string,
+  ): Promise<AssigneesBundle> {
+    const map = await this.loadAssigneesForMeetings([meetingId]);
+    return map.get(meetingId) ?? { assignedUserIds: [], assignees: [] };
+  }
+
+  private async loadAssigneesForMeetings(
+    meetingIds: string[],
+  ): Promise<Map<string, AssigneesBundle>> {
+    const map = new Map<string, AssigneesBundle>();
+    for (const id of meetingIds) {
+      map.set(id, { assignedUserIds: [], assignees: [] });
+    }
+    if (meetingIds.length === 0) return map;
+
+    const { data, error } = await this.supabase
+      .getClient()
+      .from('meeting_assignees')
+      .select(ASSIGNEE_SELECT)
+      .in('meeting_id', meetingIds)
+      .order('created_at', { ascending: true });
+
+    if (error) {
+      this.logger.warn(`loadAssigneesForMeetings failed: ${error.message}`);
+      return map;
+    }
+
+    const rows = (data ?? []) as MeetingAssigneeRow[];
+    const userIds = [...new Set(rows.map((r) => String(r.user_id)))];
+    const usersById = await this.loadUsersByIds(userIds);
+
+    for (const row of rows) {
+      const mid = String(row.meeting_id);
+      const uid = String(row.user_id);
+      const bundle = map.get(mid) ?? {
+        assignedUserIds: [],
+        assignees: [],
+      };
+      bundle.assignedUserIds.push(uid);
+      const u = usersById.get(uid);
+      if (u) {
+        bundle.assignees.push({
+          userId: uid,
+          prenom: u.prenom,
+          nom: u.nom,
+          email: u.email,
+          role: u.role,
+        });
+      } else {
+        bundle.assignees.push({
+          userId: uid,
+          prenom: '',
+          nom: '',
+          email: '',
+          role: '',
+        });
+      }
+      map.set(mid, bundle);
+    }
+    return map;
+  }
+
+  private async loadUsersByIds(
+    userIds: string[],
+  ): Promise<Map<string, MeetingAssignee>> {
+    const map = new Map<string, MeetingAssignee>();
+    if (userIds.length === 0) return map;
+
+    const { data, error } = await this.supabase
+      .getClient()
+      .from('users')
+      .select(USER_PUBLIC_COLUMNS)
+      .in('id', userIds);
+
+    if (error) {
+      this.logger.warn(`loadUsersByIds failed: ${error.message}`);
+      return map;
+    }
+
+    for (const row of (data ?? []) as UserDbRow[]) {
+      map.set(String(row.id), {
+        userId: String(row.id),
+        prenom: row.prenom?.trim() ?? '',
+        nom: row.nom?.trim() ?? '',
+        email: row.email,
+        role: normalizeApiRole(row.role),
+      });
     }
     return map;
   }
@@ -198,6 +318,49 @@ export class MeetingsService {
       });
     }
     return members;
+  }
+
+  /**
+   * Resolve staff assignees. Creator always included.
+   * fixed_meeting → [creatorId] only.
+   */
+  private resolveAssignedUserIds(
+    raw: string[] | undefined,
+    creatorId: string,
+    actor: AppUser,
+  ): string[] {
+    if (!canAssignMeetingUsers(actor.role)) {
+      return [creatorId];
+    }
+    const set = new Set<string>();
+    for (const id of raw ?? []) {
+      const t = String(id ?? '').trim();
+      if (t) set.add(t);
+    }
+    set.add(creatorId);
+    return [...set];
+  }
+
+  private async assertUsersExist(userIds: string[]): Promise<void> {
+    if (userIds.length === 0) return;
+    const { data, error } = await this.supabase
+      .getClient()
+      .from('users')
+      .select('id')
+      .in('id', userIds);
+
+    if (error) {
+      throw new ConflictException({
+        message: error.message ?? 'Vérification des assignees impossible',
+      });
+    }
+    const found = new Set((data ?? []).map((r) => String(r.id)));
+    const missing = userIds.filter((id) => !found.has(id));
+    if (missing.length > 0) {
+      throw new BadRequestException({
+        message: `assignedUserIds inconnu : ${missing.join(', ')}`,
+      });
+    }
   }
 
   /** Replace the full members list for a meeting (delete + insert). */
@@ -242,10 +405,135 @@ export class MeetingsService {
     return ((data ?? []) as MeetingMemberRow[]).map(mapMember);
   }
 
+  /** Replace staff assignees (delete + insert). Not used for client reminders. */
+  private async replaceAssignees(
+    meetingId: string,
+    userIds: string[],
+  ): Promise<AssigneesBundle> {
+    const sb = this.supabase.getClient();
+
+    const { error: delError } = await sb
+      .from('meeting_assignees')
+      .delete()
+      .eq('meeting_id', meetingId);
+
+    if (delError) {
+      throw new ConflictException({
+        message: delError.message ?? 'Suppression des assignees impossible',
+      });
+    }
+
+    if (userIds.length === 0) {
+      return { assignedUserIds: [], assignees: [] };
+    }
+
+    const rows = userIds.map((user_id) => ({
+      meeting_id: meetingId,
+      user_id,
+    }));
+
+    const { error } = await sb.from('meeting_assignees').insert(rows);
+
+    if (error) {
+      throw new ConflictException({
+        message: error.message ?? 'Enregistrement des assignees impossible',
+      });
+    }
+
+    return this.loadAssigneesForMeeting(meetingId);
+  }
+
+  /**
+   * Visibilité calendrier :
+   * - admin + admin_whatsapp → tous les RDV (y compris legacy sans assignees)
+   * - fixed_meeting → uniquement si userId ∈ assignedUserIds (legacy exclus)
+   *
+   * Les mentions servent surtout à ouvrir l’accès à fixed_meeting,
+   * pas à cacher les RDV aux admins.
+   */
+  private async assignedMeetingIdsForUser(userId: string): Promise<string[]> {
+    const { data, error } = await this.supabase
+      .getClient()
+      .from('meeting_assignees')
+      .select('meeting_id')
+      .eq('user_id', userId);
+
+    if (error) {
+      throw new ConflictException({ message: error.message });
+    }
+
+    return [...new Set((data ?? []).map((row) => String(row.meeting_id)))];
+  }
+
+  /** `null` = pas de filtre (admin / admin_whatsapp). Sinon liste d’ids. */
+  private async visibilityMeetingIds(
+    user: AppUser,
+  ): Promise<string[] | null> {
+    if (!isFixedMeeting(user.role)) return null;
+    return this.assignedMeetingIdsForUser(user.id);
+  }
+
+  private async userCanViewMeeting(
+    row: MeetingRow,
+    user: AppUser,
+  ): Promise<boolean> {
+    if (!isFixedMeeting(user.role)) return true;
+
+    const { data, error } = await this.supabase
+      .getClient()
+      .from('meeting_assignees')
+      .select('user_id')
+      .eq('meeting_id', row.id)
+      .eq('user_id', user.id)
+      .maybeSingle();
+    if (error) {
+      throw new ConflictException({ message: error.message });
+    }
+    return !!data;
+  }
+
+  private async assertCanViewMeeting(
+    meetingId: string,
+    user: AppUser,
+  ): Promise<MeetingRow> {
+    const row = await this.findRowOrThrow(meetingId);
+    if (!(await this.userCanViewMeeting(row, user))) {
+      throw new NotFoundException({ message: 'Rendez-vous introuvable.' });
+    }
+    return row;
+  }
+
+  /** Picker équipe pour assignedUserIds (admin + admin_whatsapp + fixed_meeting). */
+  async listAssignableUsers(user: AppUser) {
+    assertCanAccessMeetings(user);
+
+    const { data, error } = await this.supabase
+      .getClient()
+      .from('users')
+      .select(USER_PUBLIC_COLUMNS)
+      .order('created_at', { ascending: true });
+
+    if (error) {
+      throw new ConflictException({
+        message: error.message ?? 'Impossible de lister les utilisateurs.',
+      });
+    }
+
+    return (data ?? []).map((row) => mapUserToTeamItem(row as UserDbRow));
+  }
+
   async list(query: ListMeetingsQueryDto, user: AppUser) {
     assertCanAccessMeetings(user);
+    const visibleIds = await this.visibilityMeetingIds(user);
+    if (visibleIds && visibleIds.length === 0) {
+      return { items: [] as Meeting[] };
+    }
+
     const sb = this.supabase.getClient();
     let q = sb.from('meetings').select(SELECT_COLS);
+    if (visibleIds) {
+      q = q.in('id', visibleIds);
+    }
 
     if (query.from) {
       q = q.gte('meeting_date', query.from);
@@ -269,17 +557,26 @@ export class MeetingsService {
 
   async upcoming(user: AppUser) {
     assertCanAccessMeetings(user);
+    const visibleIds = await this.visibilityMeetingIds(user);
+    if (visibleIds && visibleIds.length === 0) {
+      return { items: [] as Meeting[] };
+    }
+
     const now = new Date();
     const to = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
 
     const sb = this.supabase.getClient();
-    const { data, error } = await sb
+    let q = sb
       .from('meetings')
       .select(SELECT_COLS)
       .eq('status', 'scheduled')
       .gte('meeting_date', now.toISOString())
-      .lte('meeting_date', to.toISOString())
-      .order('meeting_date', { ascending: true });
+      .lte('meeting_date', to.toISOString());
+    if (visibleIds) {
+      q = q.in('id', visibleIds);
+    }
+
+    const { data, error } = await q.order('meeting_date', { ascending: true });
 
     if (error) {
       throw new ConflictException({ message: error.message });
@@ -292,15 +589,24 @@ export class MeetingsService {
 
   async today(user: AppUser) {
     assertCanAccessMeetings(user);
+    const visibleIds = await this.visibilityMeetingIds(user);
+    if (visibleIds && visibleIds.length === 0) {
+      return { items: [] as Meeting[] };
+    }
+
     const { startIso, endIso } = casablancaDayBounds();
 
     const sb = this.supabase.getClient();
-    const { data, error } = await sb
+    let q = sb
       .from('meetings')
       .select(SELECT_COLS)
       .gte('meeting_date', startIso)
-      .lt('meeting_date', endIso)
-      .order('meeting_date', { ascending: true });
+      .lt('meeting_date', endIso);
+    if (visibleIds) {
+      q = q.in('id', visibleIds);
+    }
+
+    const { data, error } = await q.order('meeting_date', { ascending: true });
 
     if (error) {
       throw new ConflictException({ message: error.message });
@@ -313,29 +619,46 @@ export class MeetingsService {
 
   async stats(user: AppUser) {
     assertCanAccessMeetings(user);
+    const visibleIds = await this.visibilityMeetingIds(user);
+    if (visibleIds && visibleIds.length === 0) {
+      return { today: 0, thisWeek: 0, pending: 0, noShow: 0 };
+    }
+
     const sb = this.supabase.getClient();
     const { startIso: todayStart, endIso: todayEnd } = casablancaDayBounds();
     const { startIso: weekStart, endIso: weekEnd } = casablancaWeekBounds();
 
+    let todayQ = sb
+      .from('meetings')
+      .select('id', { count: 'exact', head: true })
+      .gte('meeting_date', todayStart)
+      .lt('meeting_date', todayEnd);
+    let weekQ = sb
+      .from('meetings')
+      .select('id', { count: 'exact', head: true })
+      .gte('meeting_date', weekStart)
+      .lt('meeting_date', weekEnd);
+    let pendingQ = sb
+      .from('meetings')
+      .select('id', { count: 'exact', head: true })
+      .eq('status', 'scheduled');
+    let noShowQ = sb
+      .from('meetings')
+      .select('id', { count: 'exact', head: true })
+      .eq('status', 'no_show');
+
+    if (visibleIds) {
+      todayQ = todayQ.in('id', visibleIds);
+      weekQ = weekQ.in('id', visibleIds);
+      pendingQ = pendingQ.in('id', visibleIds);
+      noShowQ = noShowQ.in('id', visibleIds);
+    }
+
     const [todayRes, weekRes, pendingRes, noShowRes] = await Promise.all([
-      sb
-        .from('meetings')
-        .select('id', { count: 'exact', head: true })
-        .gte('meeting_date', todayStart)
-        .lt('meeting_date', todayEnd),
-      sb
-        .from('meetings')
-        .select('id', { count: 'exact', head: true })
-        .gte('meeting_date', weekStart)
-        .lt('meeting_date', weekEnd),
-      sb
-        .from('meetings')
-        .select('id', { count: 'exact', head: true })
-        .eq('status', 'scheduled'),
-      sb
-        .from('meetings')
-        .select('id', { count: 'exact', head: true })
-        .eq('status', 'no_show'),
+      todayQ,
+      weekQ,
+      pendingQ,
+      noShowQ,
     ]);
 
     for (const res of [todayRes, weekRes, pendingRes, noShowRes]) {
@@ -380,6 +703,13 @@ export class MeetingsService {
       });
     }
 
+    const assignedUserIds = this.resolveAssignedUserIds(
+      dto.assignedUserIds,
+      user.id,
+      user,
+    );
+    await this.assertUsersExist(assignedUserIds);
+
     const meet = await this.googleMeet.createSpace();
     const meetingDateIso = new Date(meetingDate).toISOString();
     await this.blockedDays.assertMeetingDateNotBlocked(meetingDateIso);
@@ -405,6 +735,7 @@ export class MeetingsService {
         manual_reminder_sent_at: null,
         manual_reminder_whatsapp_sent: false,
         manual_reminder_email_sent: false,
+        created_by: user.id,
         created_at: now,
         updated_at: now,
       })
@@ -417,13 +748,19 @@ export class MeetingsService {
       });
     }
 
+    const meetingId = String((data as MeetingRow).id);
     const members = this.normalizeMembersInput(dto.members);
-    const savedMembers = await this.replaceMembers(
-      String((data as MeetingRow).id),
-      members,
-    );
+    const [savedMembers, savedAssignees] = await Promise.all([
+      this.replaceMembers(meetingId, members),
+      this.replaceAssignees(meetingId, assignedUserIds),
+    ]);
 
-    let meeting = mapMeetingBase(data as MeetingRow, [], savedMembers);
+    let meeting = mapMeetingBase(
+      data as MeetingRow,
+      [],
+      savedMembers,
+      savedAssignees,
+    );
 
     // 1) Jobs auto 2d/24h/2h uniquement — aucun envoi immédiat ici.
     if (ACTIVE_REMINDER_STATUSES.includes(meeting.status)) {
@@ -439,10 +776,11 @@ export class MeetingsService {
     }
 
     this.logger.log(
-      `Meeting created id=${meeting.id} meet=${meet?.meetLink ? 'yes' : 'no'} members=${savedMembers.length} notifyOnCreate=${dto.notifyOnCreate === true}`,
+      `Meeting created id=${meeting.id} meet=${meet?.meetLink ? 'yes' : 'no'} members=${savedMembers.length} assignees=${assignedUserIds.length} notifyOnCreate=${dto.notifyOnCreate === true}`,
     );
 
     // 2) Seul point d’envoi de la confirmation immédiate (WA + email).
+    // Assignees (staff) ne reçoivent JAMAIS ces rappels — uniquement contact + members.
     let notificationSent:
       | {
           whatsapp: boolean;
@@ -476,9 +814,7 @@ export class MeetingsService {
       }
     }
 
-    return notificationSent
-      ? { ...meeting, notificationSent }
-      : meeting;
+    return notificationSent ? { ...meeting, notificationSent } : meeting;
   }
 
   async saveMeetLink(
@@ -582,7 +918,7 @@ export class MeetingsService {
 
   async update(id: string, dto: UpdateMeetingDto, user: AppUser) {
     assertCanAccessMeetings(user);
-    const existing = await this.findRowOrThrow(id);
+    const existing = await this.assertCanViewMeeting(id, user);
 
     const patch: Record<string, unknown> = {
       updated_at: new Date().toISOString(),
@@ -654,8 +990,7 @@ export class MeetingsService {
     }
 
     if (dto.notes !== undefined) {
-      patch.notes =
-        dto.notes === null ? null : clean(dto.notes) || null;
+      patch.notes = dto.notes === null ? null : clean(dto.notes) || null;
     }
 
     if (dto.reminders !== undefined) {
@@ -667,6 +1002,24 @@ export class MeetingsService {
     if (dto.members !== undefined) {
       membersToSave = this.normalizeMembersInput(dto.members);
       rescheduleJobs = true;
+    }
+
+    let assigneesToSave: string[] | undefined;
+    if (dto.assignedUserIds !== undefined) {
+      if (!canAssignMeetingUsers(user.role)) {
+        throw new ForbiddenException({
+          message: 'Vous ne pouvez pas modifier les assignees de ce RDV.',
+        });
+      }
+      const creatorId = existing.created_by
+        ? String(existing.created_by)
+        : user.id;
+      assigneesToSave = this.resolveAssignedUserIds(
+        dto.assignedUserIds,
+        creatorId,
+        user,
+      );
+      await this.assertUsersExist(assigneesToSave);
     }
 
     const nextPhone =
@@ -701,6 +1054,9 @@ export class MeetingsService {
     if (membersToSave !== undefined) {
       await this.replaceMembers(id, membersToSave);
     }
+    if (assigneesToSave !== undefined) {
+      await this.replaceAssignees(id, assigneesToSave);
+    }
 
     let meeting = await this.enrich(data as MeetingRow);
 
@@ -728,7 +1084,7 @@ export class MeetingsService {
 
   async remove(id: string, user: AppUser) {
     assertCanAccessMeetings(user);
-    await this.findRowOrThrow(id);
+    await this.assertCanViewMeeting(id, user);
 
     const sb = this.supabase.getClient();
     const { error } = await sb.from('meetings').delete().eq('id', id);
@@ -742,6 +1098,12 @@ export class MeetingsService {
 
   async findById(id: string): Promise<Meeting> {
     return this.enrich(await this.findRowOrThrow(id));
+  }
+
+  async findByIdForUser(id: string, user: AppUser): Promise<Meeting> {
+    assertCanAccessMeetings(user);
+    const row = await this.assertCanViewMeeting(id, user);
+    return this.enrich(row);
   }
 
   /**

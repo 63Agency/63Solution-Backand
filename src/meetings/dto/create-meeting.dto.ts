@@ -73,6 +73,16 @@ export class CreateMeetingDto {
   @Type(() => MeetingMemberDto)
   members?: MeetingMemberDto[];
 
+  /**
+   * Users internes (staff) autorisés à voir ce RDV.
+   * Distinct de `members` (leads clients). Le créateur est toujours inclus.
+   */
+  @IsOptional()
+  @IsArray({ message: 'assignedUserIds doit être un tableau' })
+  @ArrayMaxSize(100, { message: 'assignedUserIds max 100' })
+  @IsUUID('4', { each: true, message: 'assignedUserIds contient un id invalide' })
+  assignedUserIds?: string[];
+
   @IsOptional()
   @ValidateNested()
   @Type(() => MeetingRemindersDto)
