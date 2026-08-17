@@ -14,6 +14,7 @@ import type {
   ReminderJobStatus,
   ReminderOffset,
 } from './types/meeting.types';
+import { keepsReminderJobs } from './types/meeting.types';
 import {
   firstNameOnly,
   formatMeetingDate,
@@ -144,9 +145,11 @@ export class MeetingsReminderService {
   }
 
   /**
-   * Create / refresh up to 6 jobs for a scheduled meeting.
+   * Create / refresh up to 6 jobs for an active meeting
+   * (scheduled | confirmed | bon_qualified).
    * Past offsets or unavailable channels → skipped.
    * Keeps already-sent jobs intact when rescheduling.
+   * cancelled / done / no_show → annule les jobs pending.
    */
   async scheduleJobsForMeeting(
     meeting: Meeting,
@@ -160,7 +163,7 @@ export class MeetingsReminderService {
     const sb = this.supabase.getClient();
     const nowIso = new Date().toISOString();
 
-    if (meeting.status !== 'scheduled') {
+    if (!keepsReminderJobs(meeting.status)) {
       await this.cancelPendingJobs(meeting.id);
       return;
     }
@@ -377,8 +380,8 @@ export class MeetingsReminderService {
       ...extra,
     });
 
-    if (meeting.status !== 'scheduled') {
-      return empty({ whatsappError: 'meeting non scheduled' });
+    if (!keepsReminderJobs(meeting.status)) {
+      return empty({ whatsappError: `meeting status=${meeting.status}` });
     }
 
     if (this.createConfirmInFlight.has(meeting.id)) {
@@ -482,7 +485,7 @@ export class MeetingsReminderService {
     const meeting = await this.meetings.findById(id);
     const templateLabel = `${this.meetingWaTemplate}/${MEETING_WA_LANG}`;
 
-    if (meeting.status !== 'scheduled') {
+    if (!keepsReminderJobs(meeting.status)) {
       return {
         ok: true,
         whatsappSent: false,
@@ -664,7 +667,7 @@ export class MeetingsReminderService {
       return { sent: false, failed: false };
     }
 
-    if (meeting.status !== 'scheduled') {
+    if (!keepsReminderJobs(meeting.status)) {
       await this.markJob(job.id, {
         status: 'skipped',
         error: `status=${meeting.status}`,

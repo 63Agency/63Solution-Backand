@@ -39,6 +39,7 @@ import type {
   MeetingRow,
   MeetingStatus,
 } from './types/meeting.types';
+import { keepsReminderJobs } from './types/meeting.types';
 import {
   casablancaDayBounds,
   casablancaWeekBounds,
@@ -50,8 +51,6 @@ import {
   legacyFlagsFromStatus,
   normalizeRemindersConfig,
 } from './utils/meeting-reminders';
-
-const ACTIVE_REMINDER_STATUSES: MeetingStatus[] = ['scheduled'];
 
 const MEMBER_SELECT = 'id, meeting_id, lead_id, name, phone, email, created_at';
 const ASSIGNEE_SELECT = 'meeting_id, user_id, created_at';
@@ -763,7 +762,7 @@ export class MeetingsService {
     );
 
     // 1) Jobs auto 2d/24h/2h uniquement — aucun envoi immédiat ici.
-    if (ACTIVE_REMINDER_STATUSES.includes(meeting.status)) {
+    if (keepsReminderJobs(meeting.status)) {
       try {
         await this.reminderJobs.scheduleJobsForMeeting(meeting, reminders);
         meeting = await this.enrich(data as MeetingRow);
@@ -1062,7 +1061,7 @@ export class MeetingsService {
 
     if (rescheduleJobs) {
       try {
-        if (ACTIVE_REMINDER_STATUSES.includes(meeting.status)) {
+        if (keepsReminderJobs(meeting.status)) {
           await this.reminderJobs.scheduleJobsForMeeting(meeting, undefined, {
             resetSent: resetSentJobs,
           });

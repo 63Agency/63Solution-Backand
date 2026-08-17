@@ -65,7 +65,15 @@ Voir `sql/031-meeting-assignees.sql` :
 
 ---
 
-## Rappels
+## Statuts meeting
 
-Les assignees **ne reçoivent pas** de WhatsApp / email.  
-Seuls le contact principal + `members` (clients) sont notifiés.
+| Valeur API | Label UI | Rappels auto |
+|------------|----------|--------------|
+| `scheduled` | Planifié | gardés |
+| `confirmed` | Confirmé | gardés |
+| `bon_qualified` | Bon Qualified | gardés |
+| `done` | Fait | annulés |
+| `cancelled` | Annulé | annulés |
+| `no_show` | No-show | annulés |
+
+SQL : `sql/032-meeting-statuses-confirmed-bon-qualified.sql`

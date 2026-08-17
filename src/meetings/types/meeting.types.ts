@@ -1,5 +1,7 @@
 export const MEETING_STATUSES = [
   'scheduled',
+  'confirmed',
+  'bon_qualified',
   'done',
   'cancelled',
   'no_show',
@@ -7,6 +9,19 @@ export const MEETING_STATUSES = [
 
 export type MeetingStatus = (typeof MEETING_STATUSES)[number];
 
+/** Jobs auto + envois manuels : gardés pour ces statuts. */
+export const ACTIVE_REMINDER_STATUSES: readonly MeetingStatus[] = [
+  'scheduled',
+  'confirmed',
+  'bon_qualified',
+] as const;
+
+export const MEETING_STATUS_LABEL =
+  'scheduled | confirmed | bon_qualified | done | cancelled | no_show';
+
+export function keepsReminderJobs(status: string): boolean {
+  return (ACTIVE_REMINDER_STATUSES as readonly string[]).includes(status);
+}
 export const REMINDER_OFFSETS = ['2d', '24h', '2h'] as const;
 export type ReminderOffset = (typeof REMINDER_OFFSETS)[number];
 

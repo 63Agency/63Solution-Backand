@@ -57,7 +57,7 @@ export class UpdateMeetingDto {
 
   @IsOptional()
   @IsIn([...MEETING_STATUSES], {
-    message: 'status doit être scheduled | done | cancelled | no_show',
+    message: 'status doit être scheduled | confirmed | bon_qualified | done | cancelled | no_show',
   })
   status?: string;
 
