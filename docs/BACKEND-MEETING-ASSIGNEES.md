@@ -65,6 +65,24 @@ Voir `sql/031-meeting-assignees.sql` :
 
 ---
 
+## Filtre équipe (tableau RDV)
+
+Select « Toute l’équipe » / Saad / Sara… — UI **admin** + **admin_whatsapp** uniquement (`fixed_meeting` ne le voit pas).
+
+Option serveur :
+
+```http
+GET /meetings?assignedUserId=<uuid>
+```
+
+- Renvoie les RDV où cet user est dans `assignedUserIds`
+- Autorisé pour `admin` + `admin_whatsapp` seulement (`fixed_meeting` → 403)
+- Absent = pas de filtre équipe
+
+Picker options : `GET /users` ou `GET /meetings/assignable-users`
+
+---
+
 ## Statuts meeting
 
 | Valeur API | Label UI | Rappels auto |

@@ -1,5 +1,5 @@
 import { Transform } from 'class-transformer';
-import { IsDateString, IsIn, IsOptional } from 'class-validator';
+import { IsDateString, IsIn, IsOptional, IsUUID } from 'class-validator';
 import { MEETING_STATUSES } from '../types/meeting.types';
 
 function emptyToUndefined(v: unknown): unknown {
@@ -24,4 +24,14 @@ export class ListMeetingsQueryDto {
     message: 'status doit être scheduled | confirmed | bon_qualified | done | cancelled | no_show',
   })
   status?: string;
+
+  /**
+   * Filtre équipe (admin / admin_whatsapp uniquement) :
+   * RDV où cet user est dans assignedUserIds.
+   * Absent / vide = toute l’équipe (pas de filtre).
+   */
+  @IsOptional()
+  @Transform(({ value }) => emptyToUndefined(value))
+  @IsUUID('4', { message: 'assignedUserId invalide' })
+  assignedUserId?: string;
 }

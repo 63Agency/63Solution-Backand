@@ -528,10 +528,40 @@ export class MeetingsService {
       return { items: [] as Meeting[] };
     }
 
+    let assigneeFilterIds: string[] | null = null;
+    if (query.assignedUserId) {
+      if (!canAssignMeetingUsers(user.role)) {
+        throw new ForbiddenException({
+          message:
+            'Filtre assignedUserId réservé aux admin et admin_whatsapp.',
+        });
+      }
+      assigneeFilterIds = await this.assignedMeetingIdsForUser(
+        query.assignedUserId,
+      );
+      if (assigneeFilterIds.length === 0) {
+        return { items: [] as Meeting[] };
+      }
+    }
+
+    // Intersection visibilité (fixed_meeting) ∩ filtre équipe (admins).
+    let idFilter: string[] | null = null;
+    if (visibleIds && assigneeFilterIds) {
+      const set = new Set(assigneeFilterIds);
+      idFilter = visibleIds.filter((id) => set.has(id));
+      if (idFilter.length === 0) {
+        return { items: [] as Meeting[] };
+      }
+    } else if (visibleIds) {
+      idFilter = visibleIds;
+    } else if (assigneeFilterIds) {
+      idFilter = assigneeFilterIds;
+    }
+
     const sb = this.supabase.getClient();
     let q = sb.from('meetings').select(SELECT_COLS);
-    if (visibleIds) {
-      q = q.in('id', visibleIds);
+    if (idFilter) {
+      q = q.in('id', idFilter);
     }
 
     if (query.from) {
