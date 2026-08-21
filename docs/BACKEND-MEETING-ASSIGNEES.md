@@ -65,6 +65,19 @@ Voir `sql/031-meeting-assignees.sql` :
 
 ---
 
+## Titres meeting (liste fixe)
+
+Champ `title` (string) — valeurs exactes à la création / édition :
+
+- `Audit Performance Marketing` (défaut front)
+- `Audit Performance Marketing présentiel`
+- `Audit Performance Marketing online`
+
+Les RDV legacy avec un autre titre restent lisibles ; un `PATCH` doit forcer une des 3 valeurs.  
+WhatsApp / email utilisent `meeting.title` tel quel.
+
+---
+
 ## Filtre équipe (tableau RDV)
 
 Select « Toute l’équipe » / Saad / Sara… — UI **admin** + **admin_whatsapp** uniquement (`fixed_meeting` ne le voit pas).

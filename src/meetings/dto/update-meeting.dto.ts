@@ -12,7 +12,7 @@ import {
   MinLength,
   ValidateNested,
 } from 'class-validator';
-import { MEETING_STATUSES } from '../types/meeting.types';
+import { MEETING_STATUSES, MEETING_TITLES } from '../types/meeting.types';
 import { MeetingMemberDto } from './meeting-member.dto';
 import { MeetingRemindersDto } from './meeting-reminders.dto';
 
@@ -28,9 +28,10 @@ export class UpdateMeetingDto {
   leadId?: string | null;
 
   @IsOptional()
-  @IsString({ message: 'title invalide' })
-  @MinLength(1, { message: 'title requis' })
-  @MaxLength(300, { message: 'title trop long' })
+  @IsIn([...MEETING_TITLES], {
+    message:
+      'title doit être : Audit Performance Marketing | Audit Performance Marketing présentiel | Audit Performance Marketing online',
+  })
   title?: string;
 
   @IsOptional()

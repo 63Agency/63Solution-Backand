@@ -9,6 +9,18 @@ export const MEETING_STATUSES = [
 
 export type MeetingStatus = (typeof MEETING_STATUSES)[number];
 
+/** Titres autorisés à la création / édition (liste fixe front). */
+export const MEETING_TITLES = [
+  'Audit Performance Marketing',
+  'Audit Performance Marketing présentiel',
+  'Audit Performance Marketing online',
+] as const;
+
+export type MeetingTitle = (typeof MEETING_TITLES)[number];
+
+export const DEFAULT_MEETING_TITLE: MeetingTitle =
+  'Audit Performance Marketing';
+
 /** Jobs auto + envois manuels : gardés pour ces statuts. */
 export const ACTIVE_REMINDER_STATUSES: readonly MeetingStatus[] = [
   'scheduled',
