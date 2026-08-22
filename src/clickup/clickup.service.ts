@@ -10,7 +10,10 @@ import type { AppUser } from '../auth/types/app-user';
 import { assertCanAccessLeads } from '../common/utils/access';
 import { SupabaseService } from '../supabase/supabase.service';
 import type { ClickUpLead } from './types/clickup.types';
-import { mapClickUpTaskToLead } from './utils/clickup-task-parser';
+import {
+  mapClickUpTaskToLead,
+  resolveLeadEmail,
+} from './utils/clickup-task-parser';
 
 type LeadRow = {
   id: string;
@@ -25,15 +28,34 @@ type LeadRow = {
   updated_at: string;
 };
 
+function customFieldsFromClickupData(
+  clickupData: Record<string, unknown> | null,
+): unknown[] | undefined {
+  if (!clickupData || typeof clickupData !== 'object') return undefined;
+  const task = clickupData.task;
+  if (!task || typeof task !== 'object') return undefined;
+  const fields = (task as Record<string, unknown>).custom_fields;
+  return Array.isArray(fields) ? fields : undefined;
+}
+
 function mapLeadRow(row: LeadRow): ClickUpLead {
+  const name = row.name ? String(row.name) : null;
+  const email = resolveLeadEmail({
+    existingEmail: row.email ? String(row.email) : null,
+    customFields: customFieldsFromClickupData(row.clickup_data),
+    name,
+  });
+
   return {
     id: String(row.id),
-    name: row.name ? String(row.name) : null,
+    name,
     status: row.status ? String(row.status) : null,
     listId: row.list_id ? String(row.list_id) : null,
     listName: row.list_name ? String(row.list_name) : null,
     phone: row.phone ? String(row.phone) : null,
-    email: row.email ? String(row.email) : null,
+    email,
+    contact_email: email,
+    contactEmail: email,
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
     clickupData: (row.clickup_data ?? {}) as Record<string, unknown>,

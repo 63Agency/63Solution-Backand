@@ -13,7 +13,17 @@ const EMAIL_FIELD_NAMES = new Set([
   'e-mail',
   'mail',
   'courriel',
+  'contact_email',
+  'contact email',
+  'contactemail',
+  'email professionnel',
+  'email personnel',
+  'e mail',
 ]);
+
+/** Simple email match (ex. dans le titre ClickUp). */
+const EMAIL_IN_TEXT_RE =
+  /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i;
 
 function normFieldName(name: string): string {
   return name.trim().toLowerCase();
@@ -41,6 +51,25 @@ function extractCustomFieldValue(field: Record<string, unknown>): string {
   return '';
 }
 
+function looksLikeEmailField(name: string): boolean {
+  if (EMAIL_FIELD_NAMES.has(name)) return true;
+  // Ex. "Email client", "Mail pro"
+  return (
+    name.includes('email') ||
+    name.includes('e-mail') ||
+    name.includes('courriel') ||
+    /(^|[^a-z])mail([^a-z]|$)/.test(name)
+  );
+}
+
+export function extractEmailFromText(
+  text: string | null | undefined,
+): string | null {
+  if (!text) return null;
+  const m = text.match(EMAIL_IN_TEXT_RE);
+  return m ? m[0].toLowerCase() : null;
+}
+
 export function extractPhoneFromCustomFields(
   fields: unknown[] | undefined,
 ): string | null {
@@ -64,11 +93,29 @@ export function extractEmailFromCustomFields(
     if (!raw || typeof raw !== 'object') continue;
     const field = raw as Record<string, unknown>;
     const name = normFieldName(pickStr(field, 'name'));
-    if (!EMAIL_FIELD_NAMES.has(name)) continue;
+    if (!looksLikeEmailField(name)) continue;
     const val = extractCustomFieldValue(field);
-    if (val) return val;
+    const fromVal = extractEmailFromText(val) ?? (val.includes('@') ? val : null);
+    if (fromVal) return fromVal.toLowerCase();
   }
   return null;
+}
+
+/**
+ * Résout l’email : custom fields ClickUp, puis texte du nom/titre.
+ */
+export function resolveLeadEmail(options: {
+  customFields?: unknown[];
+  name?: string | null;
+  existingEmail?: string | null;
+}): string | null {
+  const existing = options.existingEmail?.trim();
+  if (existing) return existing.toLowerCase();
+
+  const fromFields = extractEmailFromCustomFields(options.customFields);
+  if (fromFields) return fromFields;
+
+  return extractEmailFromText(options.name);
 }
 
 function parseClickUpTimestamp(raw: unknown): string | null {
@@ -143,7 +190,7 @@ export function mapClickUpTaskToLead(
     listId,
     listName,
     phone: extractPhoneFromCustomFields(customFields),
-    email: extractEmailFromCustomFields(customFields),
+    email: resolveLeadEmail({ customFields, name }),
     createdAt,
     updatedAt,
     clickupData: {
