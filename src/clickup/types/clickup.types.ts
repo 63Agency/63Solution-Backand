@@ -1,5 +1,10 @@
 export type ClickUpLead = {
+  /** UUID interne — utiliser pour POST /meetings.leadId */
   id: string;
+  /** Id tâche ClickUp */
+  clickupTaskId: string | null;
+  /** Alias snake_case */
+  clickup_task_id: string | null;
   name: string | null;
   status: string | null;
   listId: string | null;

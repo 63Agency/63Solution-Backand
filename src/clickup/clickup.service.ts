@@ -17,6 +17,7 @@ import {
 
 type LeadRow = {
   id: string;
+  clickup_task_id: string | null;
   name: string | null;
   status: string | null;
   list_id: string | null;
@@ -45,9 +46,14 @@ function mapLeadRow(row: LeadRow): ClickUpLead {
     customFields: customFieldsFromClickupData(row.clickup_data),
     name,
   });
+  const clickupTaskId = row.clickup_task_id
+    ? String(row.clickup_task_id)
+    : null;
 
   return {
     id: String(row.id),
+    clickupTaskId,
+    clickup_task_id: clickupTaskId,
     name,
     status: row.status ? String(row.status) : null,
     listId: row.list_id ? String(row.list_id) : null,
@@ -200,17 +206,19 @@ export class ClickupService {
     };
   }
 
-  private async leadExists(id: string): Promise<boolean> {
+  private async leadExistsByClickupTaskId(
+    clickupTaskId: string,
+  ): Promise<boolean> {
     const { data, error } = await this.supabase
       .getClient()
       .from('clickup_leads')
       .select('id')
-      .eq('id', id)
+      .eq('clickup_task_id', clickupTaskId)
       .maybeSingle();
 
     if (error) {
       this.logger.warn(
-        `[ClickUpSync] leadExists check failed id=${id}: ${error.message}`,
+        `[ClickUpSync] leadExists check failed clickup_task_id=${clickupTaskId}: ${error.message}`,
       );
       return false;
     }
@@ -271,7 +279,7 @@ export class ClickupService {
           continue;
         }
 
-        const existed = await this.leadExists(mapped.id);
+        const existed = await this.leadExistsByClickupTaskId(mapped.id);
         await this.saveOrUpdateLead(enriched);
         if (existed) stats.updated += 1;
         else stats.inserted += 1;
@@ -326,7 +334,7 @@ export class ClickupService {
     }
 
     const row = {
-      id: mapped.id,
+      clickup_task_id: mapped.id,
       name: mapped.name,
       status: mapped.status,
       list_id: mapped.listId,
@@ -341,7 +349,7 @@ export class ClickupService {
     const { data, error } = await this.supabase
       .getClient()
       .from('clickup_leads')
-      .upsert(row, { onConflict: 'id' })
+      .upsert(row, { onConflict: 'clickup_task_id' })
       .select('*')
       .single();
 
@@ -352,7 +360,7 @@ export class ClickupService {
     }
 
     this.logger.log(
-      `ClickUp lead saved id=${mapped.id} status=${mapped.status ?? ''} list=${mapped.listName ?? ''}`,
+      `ClickUp lead saved id=${(data as LeadRow).id} clickup_task_id=${mapped.id} status=${mapped.status ?? ''} list=${mapped.listName ?? ''}`,
     );
     return mapLeadRow(data as LeadRow);
   }
@@ -424,12 +432,25 @@ export class ClickupService {
       throw new NotFoundException({ message: 'Lead introuvable.' });
     }
 
-    const { data, error } = await this.supabase
-      .getClient()
+    const sb = this.supabase.getClient();
+
+    // 1) UUID interne (préféré pour meetings.leadId)
+    let { data, error } = await sb
       .from('clickup_leads')
       .select('*')
       .eq('id', leadId)
       .maybeSingle();
+
+    // 2) Fallback id ClickUp (compat ancienne API / liens)
+    if (!error && !data) {
+      const byClickup = await sb
+        .from('clickup_leads')
+        .select('*')
+        .eq('clickup_task_id', leadId)
+        .maybeSingle();
+      data = byClickup.data;
+      error = byClickup.error;
+    }
 
     if (error) {
       throw new ConflictException({ message: error.message });

@@ -22,6 +22,10 @@ function emptyToUndefined(v: unknown): unknown {
 }
 
 export class UpdateMeetingDto {
+  /**
+   * UUID interne du lead (`GET /leads` → `id`).
+   * null / absent = RDV manuel (contactName + téléphone ou email).
+   */
   @IsOptional()
   @Transform(({ value }) => emptyToUndefined(value))
   @IsUUID('4', { message: 'leadId invalide' })

@@ -184,7 +184,7 @@ export function mapClickUpTaskToLead(
     parseClickUpTimestamp(task.date_updated) ?? createdAt;
 
   return {
-    id,
+    id, // ClickUp task id — persisté comme clickup_task_id
     name,
     status,
     listId,
