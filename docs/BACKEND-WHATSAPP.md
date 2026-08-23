@@ -46,11 +46,53 @@ Traite le payload `whatsapp_business_account` :
 
 | Méthode | Route | Description |
 |---------|--------|-------------|
+| GET | `/whatsapp/templates` | Templates Meta approuvés (incl. `bonjour` si créé) |
 | GET | `/whatsapp/conversations` | Liste |
 | GET | `/whatsapp/conversations/:id` | Détail |
 | GET | `/whatsapp/conversations/:id/messages` | Messages |
-| POST | `/whatsapp/conversations/:id/messages` | `{ "text": "..." }` → Meta + save outbound |
+| POST | `/whatsapp/conversations/:id/messages` | Texte / média → Meta + save outbound |
+| POST | `/whatsapp/conversations/:id/messages/template` | Template (ex. `bonjour`) lié à la conversation |
+| POST | `/whatsapp/broadcast` | Texte **ou** template vers 1..n numéros |
+| POST | `/whatsapp/messages/bulk` | Alias de `/broadcast` (fallback front) |
 | PATCH | `/whatsapp/conversations/:id/read` | `unread_count = 0` + notifications liées lues |
+
+### Template « Envoyer Bonjour » (fenêtre 24 h)
+
+1. Créer dans Meta Business Manager un template **`bonjour`** (langue **`fr`**), APPROVED, body ex. `Bonjour {{1}}, comment puis-je vous aider ?`
+2. Front → `POST /whatsapp/broadcast` :
+
+```json
+{
+  "phoneNumbers": ["212612345678"],
+  "templateName": "bonjour",
+  "templateLanguage": "fr",
+  "variable1": "Karim",
+  "components": [
+    { "type": "body", "parameters": [{ "type": "text", "text": "Karim" }] }
+  ]
+}
+```
+
+Réponse :
+
+```json
+{
+  "sent": 1,
+  "failed": 0,
+  "results": [
+    {
+      "phoneNumber": "212612345678",
+      "success": true,
+      "conversationId": "uuid",
+      "messageId": "uuid"
+    }
+  ]
+}
+```
+
+Échec Meta → `success: false` + `error` (souvent préfixé `Meta: …` : fenêtre 24 h, template inconnu, numéro invalide).
+
+Alternative conversation : `POST /whatsapp/conversations/:id/messages/template` avec `{ "templateName": "bonjour", "templateLanguage": "fr", "variable1": "Karim" }` → objet message (même shape que l’envoi texte).
 
 Chaque message **inbound** (webhook Meta) met à jour `last_message_text`, `last_message_at`, incrémente `unread_count`, et crée une ligne `notifications` (`type: whatsapp.message`). Les messages **outbound** (POST messages) ne touchent pas `unread_count`.
 

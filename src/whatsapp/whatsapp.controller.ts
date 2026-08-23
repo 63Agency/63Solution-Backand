@@ -20,6 +20,7 @@ import type { Response } from 'express';
 import type { AppUser } from '../auth/types/app-user';
 import { SendWhatsappMessageDto } from './dto/send-whatsapp-message.dto';
 import { BroadcastWhatsappMessageDto } from './dto/broadcast-whatsapp-message.dto';
+import { SendWhatsappTemplateDto } from './dto/send-whatsapp-template.dto';
 import { WhatsappService } from './whatsapp.service';
 
 @Controller('whatsapp')
@@ -87,8 +88,26 @@ export class WhatsappController {
     return this.whatsapp.sendMessage(id, dto);
   }
 
+  /**
+   * Template Meta (ex. « Envoyer Bonjour ») lié à la conversation ouverte.
+   * Body : { templateName, templateLanguage?, variable1? }
+   */
+  @Post('conversations/:id/messages/template')
+  sendTemplateMessage(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: SendWhatsappTemplateDto,
+  ) {
+    return this.whatsapp.sendTemplateToConversation(id, dto);
+  }
+
   @Post('broadcast')
   broadcast(@Body() dto: BroadcastWhatsappMessageDto) {
+    return this.whatsapp.broadcastMessage(dto);
+  }
+
+  /** Alias front (fallback si /broadcast 404). Même body / réponse que broadcast. */
+  @Post('messages/bulk')
+  broadcastBulk(@Body() dto: BroadcastWhatsappMessageDto) {
     return this.whatsapp.broadcastMessage(dto);
   }
 

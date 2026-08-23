@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  HttpException,
   Injectable,
   Logger,
   NotFoundException,
@@ -10,6 +11,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { SupabaseService } from '../supabase/supabase.service';
 import { SendWhatsappMessageDto } from './dto/send-whatsapp-message.dto';
 import { BroadcastWhatsappMessageDto } from './dto/broadcast-whatsapp-message.dto';
+import { SendWhatsappTemplateDto } from './dto/send-whatsapp-template.dto';
 import type {
   MessageDirection,
   WhatsappConversation,
@@ -22,6 +24,29 @@ import {
   stringifyForLog,
 } from './utils/whatsapp-debug-log';
 
+export type BroadcastResultItem = {
+  phoneNumber: string;
+  success: boolean;
+  conversationId?: string;
+  messageId?: string;
+  error?: string;
+};
+
+function extractSendErrorMessage(err: unknown): string {
+  if (err instanceof HttpException) {
+    const r = err.getResponse();
+    if (typeof r === 'string' && r.trim()) return r.trim();
+    if (r && typeof r === 'object') {
+      const m = (r as Record<string, unknown>).message;
+      if (typeof m === 'string' && m.trim()) return m.trim();
+      if (Array.isArray(m) && typeof m[0] === 'string' && m[0].trim()) {
+        return m[0].trim();
+      }
+    }
+  }
+  if (err instanceof Error && err.message.trim()) return err.message.trim();
+  return 'Envoi impossible';
+}
 const INBOUND_MEDIA_TYPES = new Set(['image', 'video', 'document', 'audio']);
 const MEDIA_UNAVAILABLE = 'Media unavailable';
 
@@ -624,7 +649,7 @@ export class WhatsappService {
   async broadcastMessage(dto: BroadcastWhatsappMessageDto): Promise<{
     sent: number;
     failed: number;
-    results: { phoneNumber: string; success: boolean; error?: string }[];
+    results: BroadcastResultItem[];
   }> {
     const templateName = dto.templateName?.trim() ?? '';
     const isTemplate = Boolean(templateName);
@@ -636,8 +661,7 @@ export class WhatsappService {
       parameters: c.parameters.map((p) => ({ type: p.type, text: p.text })),
     }));
 
-    const results: { phoneNumber: string; success: boolean; error?: string }[] =
-      [];
+    const results: BroadcastResultItem[] = [];
     const phones = dto.phoneNumbers.map((p) => String(p).trim()).filter(Boolean);
 
     for (let i = 0; i < phones.length; i++) {
@@ -680,7 +704,7 @@ export class WhatsappService {
           incrementUnread: false,
         });
 
-        await this.persistMessage({
+        const { message } = await this.persistMessage({
           conversationId: conv.id,
           direction: 'outbound',
           body: sent.text,
@@ -692,10 +716,14 @@ export class WhatsappService {
           incrementUnread: false,
         });
 
-        results.push({ phoneNumber, success: true });
+        results.push({
+          phoneNumber,
+          success: true,
+          conversationId: conv.id,
+          messageId: message.id,
+        });
       } catch (err: unknown) {
-        const error =
-          err instanceof Error ? err.message : 'Envoi impossible';
+        const error = extractSendErrorMessage(err);
         this.logger.warn(
           `[broadcast] failed phone=${phoneNumber}: ${error}`,
         );
@@ -714,6 +742,60 @@ export class WhatsappService {
     );
 
     return { sent, failed, results };
+  }
+
+  /**
+   * Template Meta lié à une conversation ouverte (ex. bouton « Envoyer Bonjour »).
+   * Même shape de réponse que POST .../messages (texte).
+   */
+  async sendTemplateToConversation(
+    conversationId: string,
+    dto: SendWhatsappTemplateDto,
+  ): Promise<WhatsappMessage> {
+    const conv = await this.conversationByIdOr404(conversationId);
+    const templateName = dto.templateName.trim();
+    const templateLanguage = dto.templateLanguage?.trim() || 'fr';
+    const variable1 =
+      dto.variable1?.trim() ||
+      conv.contact_name?.trim() ||
+      'Client';
+
+    const sent = await this.meta.sendTemplateMessage(
+      conv.phone_number,
+      templateName,
+      templateLanguage,
+      undefined,
+      variable1,
+    );
+
+    const now = new Date().toISOString();
+    const sentAt = sent.sentAt ?? now;
+
+    const { message } = await this.persistMessage({
+      conversationId: conv.id,
+      direction: 'outbound',
+      body: sent.text,
+      type: 'template',
+      status: sent.status,
+      watiMessageId: sent.whatsappMessageId,
+      watiLocalId: null,
+      sentAt,
+      incrementUnread: false,
+    });
+
+    await this.touchConversation(conv.id, {
+      lastMessageText: sent.text,
+      lastMessageAt: sentAt,
+      contactName: conv.contact_name,
+      watiContactId: conv.wati_contact_id,
+      watiConversationId: conv.wati_conversation_id,
+    });
+
+    this.logger.log(
+      `[template] conversationId=${conv.id} template=${templateName}/${templateLanguage} messageId=${message.id}`,
+    );
+
+    return message;
   }
 
   private delay(ms: number): Promise<void> {
