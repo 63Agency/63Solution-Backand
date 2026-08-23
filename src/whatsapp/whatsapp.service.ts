@@ -655,11 +655,17 @@ export class WhatsappService {
     const isTemplate = Boolean(templateName);
     const text = dto.text?.trim() ?? '';
     const templateLanguage = dto.templateLanguage?.trim() || 'fr';
+    // Pass through only if present — never invent a default for 0-var templates.
     const variable1 = dto.variable1?.trim() || undefined;
-    const components = dto.components?.map((c) => ({
-      type: c.type,
-      parameters: c.parameters.map((p) => ({ type: p.type, text: p.text })),
-    }));
+    const components = dto.components?.length
+      ? dto.components.map((c) => ({
+          type: c.type,
+          parameters: c.parameters.map((p) => ({
+            type: p.type,
+            text: p.text,
+          })),
+        }))
+      : undefined;
 
     const results: BroadcastResultItem[] = [];
     const phones = dto.phoneNumbers.map((p) => String(p).trim()).filter(Boolean);
@@ -745,8 +751,8 @@ export class WhatsappService {
   }
 
   /**
-   * Template Meta lié à une conversation ouverte (ex. bouton « Envoyer Bonjour »).
-   * Même shape de réponse que POST .../messages (texte).
+   * Template Meta lié à une conversation ouverte (ex. « Envoyer Bonjour »).
+   * Ne injecte PAS variable1 si absent — templates 0 variable (just_bonjour).
    */
   async sendTemplateToConversation(
     conversationId: string,
@@ -755,10 +761,8 @@ export class WhatsappService {
     const conv = await this.conversationByIdOr404(conversationId);
     const templateName = dto.templateName.trim();
     const templateLanguage = dto.templateLanguage?.trim() || 'fr';
-    const variable1 =
-      dto.variable1?.trim() ||
-      conv.contact_name?.trim() ||
-      'Client';
+    // Only pass variable1 when the front explicitly sent it.
+    const variable1 = dto.variable1?.trim() || undefined;
 
     const sent = await this.meta.sendTemplateMessage(
       conv.phone_number,

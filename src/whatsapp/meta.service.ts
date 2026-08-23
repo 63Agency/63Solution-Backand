@@ -344,10 +344,9 @@ export class MetaService {
 
     const languageCode = language.trim() || 'fr';
 
-    // Prefer explicit body components when they contain real text params
-    // (e.g. meeting_reminder_util with {{1}}…{{4}}).
-    // Otherwise fall back to variable1. Empty / "{{n}}" → components: []
-    // to avoid Meta #132000 on no-variable templates.
+    // Only send body parameters when the caller provided real values.
+    // Do NOT invent variable1 — zero-variable templates (ex. just_bonjour)
+    // reject any param with Meta #132000.
     const bodyParamsFromComponents = (_components ?? [])
       .filter((c) => String(c.type).toLowerCase() === 'body')
       .flatMap((c) => c.parameters ?? [])
@@ -376,18 +375,23 @@ export class MetaService {
                 parameters: [{ type: 'text', text: resolvedVariable1 }],
               },
             ]
-          : [];
+          : undefined;
+
+    const template: Record<string, unknown> = {
+      name: templateName,
+      language: { code: languageCode },
+    };
+    // Omit components entirely when the template has 0 variables.
+    if (templateComponents && templateComponents.length > 0) {
+      template.components = templateComponents;
+    }
 
     const payload = {
       messaging_product: 'whatsapp',
       recipient_type: 'individual',
       to: phone,
       type: 'template',
-      template: {
-        name: templateName,
-        language: { code: languageCode },
-        components: templateComponents,
-      },
+      template,
     };
 
     this.logger.log(
@@ -398,7 +402,7 @@ export class MetaService {
         bodyParamsFromComponents.length > 0
           ? bodyParamsFromComponents
           : resolvedVariable1 || null,
-      )}`,
+      )} hasComponents=${Boolean(template.components)}`,
     );
     this.logger.log(
       `Meta sendTemplate payload=${JSON.stringify(payload)}`,
