@@ -7,9 +7,18 @@ type SendMailInput = {
   subject: string;
   text: string;
   html?: string;
-  attachments?: Array<{ filename: string; content: Buffer; contentType?: string }>;
+  attachments?: Array<{
+    filename: string;
+    content: Buffer;
+    contentType?: string;
+  }>;
 };
 
+/**
+ * SMTP account for meeting confirmations / document emails.
+ * Uses SMTP_HOST, SMTP_PORT, SMTP_SECURE, SMTP_USER, SMTP_PASS only.
+ * Do NOT use for bulk marketing — see BulkMailerService (BULK_SMTP_*).
+ */
 @Injectable()
 export class MailerService {
   constructor(private readonly config: ConfigService) {}
@@ -33,7 +42,8 @@ export class MailerService {
       });
     }
 
-    const secure = this.config.get<string>('SMTP_SECURE') === 'true' || port === 465;
+    const secure =
+      this.config.get<string>('SMTP_SECURE') === 'true' || port === 465;
     return nodemailer.createTransport({
       host,
       port,
@@ -52,7 +62,9 @@ export class MailerService {
     });
   }
 
-  async sendMail(input: SendMailInput): Promise<{ messageId: string; sentAt: string }> {
+  async sendMail(
+    input: SendMailInput,
+  ): Promise<{ messageId: string; sentAt: string }> {
     try {
       const transport = this.createTransport();
       const info = await transport.sendMail({

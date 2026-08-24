@@ -10,6 +10,7 @@ import { ClickupModule } from './clickup/clickup.module';
 import { CloudinaryModule } from './cloudinary/cloudinary.module';
 import { ClientsModule } from './clients/clients.module';
 import { DevisModule } from './devis/devis.module';
+import { EmailModule } from './email/email.module';
 import { FacturesModule } from './factures/factures.module';
 import { MeetingsModule } from './meetings/meetings.module';
 import { PropositionsModule } from './propositions/propositions.module';
@@ -34,6 +35,7 @@ import { LeadsModule } from './leads/leads.module';
     CloudinaryModule,
     ClientsModule,
     DevisModule,
+    EmailModule,
     FacturesModule,
     PropositionsModule,
     MeetingsModule,
