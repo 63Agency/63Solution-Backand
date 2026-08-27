@@ -2,6 +2,7 @@ export const MEETING_STATUSES = [
   'scheduled',
   'confirmed',
   'bon_qualified',
+  'non_qualified',
   'done',
   'no_answer',
   'cancelled',
@@ -25,7 +26,7 @@ export const DEFAULT_MEETING_TITLE: MeetingTitle =
 
 /**
  * Jobs auto + envois manuels : gardés pour ces statuts.
- * Annulés pour : cancelled | done | no_show | reported.
+ * Annulés pour : cancelled | done | no_show | reported | non_qualified.
  */
 export const ACTIVE_REMINDER_STATUSES: readonly MeetingStatus[] = [
   'scheduled',
@@ -35,7 +36,7 @@ export const ACTIVE_REMINDER_STATUSES: readonly MeetingStatus[] = [
 ] as const;
 
 export const MEETING_STATUS_LABEL =
-  'scheduled | confirmed | bon_qualified | done | no_answer | cancelled | reported | no_show';
+  'scheduled | confirmed | bon_qualified | non_qualified | done | no_answer | cancelled | reported | no_show';
 
 export function keepsReminderJobs(status: string): boolean {
   return (ACTIVE_REMINDER_STATUSES as readonly string[]).includes(status);
