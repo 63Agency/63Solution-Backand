@@ -10,7 +10,7 @@ create table if not exists public.meetings (
   contact_phone text null,
   contact_email text null,
   status text not null default 'scheduled'
-    check (status in ('scheduled', 'confirmed', 'bon_qualified', 'done', 'cancelled', 'no_show')),
+    check (status in ('scheduled', 'confirmed', 'bon_qualified', 'done', 'no_answer', 'cancelled', 'reported', 'no_show')),
   reminder_whatsapp_sent boolean not null default false,
   reminder_email_sent boolean not null default false,
   notes text null,

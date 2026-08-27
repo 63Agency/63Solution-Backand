@@ -1,6 +1,6 @@
 import { Transform } from 'class-transformer';
 import { IsDateString, IsIn, IsOptional, IsUUID } from 'class-validator';
-import { MEETING_STATUSES } from '../types/meeting.types';
+import { MEETING_STATUSES, MEETING_STATUS_LABEL } from '../types/meeting.types';
 
 function emptyToUndefined(v: unknown): unknown {
   if (v === '' || v === null) return undefined;
@@ -21,7 +21,7 @@ export class ListMeetingsQueryDto {
   @IsOptional()
   @Transform(({ value }) => emptyToUndefined(value))
   @IsIn([...MEETING_STATUSES], {
-    message: 'status doit être scheduled | confirmed | bon_qualified | done | cancelled | no_show',
+    message: `status doit être ${MEETING_STATUS_LABEL}`,
   })
   status?: string;
 

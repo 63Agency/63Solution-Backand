@@ -103,8 +103,10 @@ Picker options : `GET /users` ou `GET /meetings/assignable-users`
 | `scheduled` | Planifié | gardés |
 | `confirmed` | Confirmé | gardés |
 | `bon_qualified` | Bon Qualified | gardés |
+| `no_answer` | No answer | gardés |
 | `done` | Fait | annulés |
 | `cancelled` | Annulé | annulés |
+| `reported` | Reported | annulés |
 | `no_show` | No-show | annulés |
 
-SQL : `sql/032-meeting-statuses-confirmed-bon-qualified.sql`
+SQL : `sql/032-…`, `sql/034-meeting-statuses-no-answer-reported.sql`

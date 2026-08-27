@@ -13,7 +13,7 @@ import {
   MinLength,
   ValidateNested,
 } from 'class-validator';
-import { MEETING_STATUSES, MEETING_TITLES } from '../types/meeting.types';
+import { MEETING_STATUSES, MEETING_STATUS_LABEL, MEETING_TITLES } from '../types/meeting.types';
 import { MeetingMemberDto } from './meeting-member.dto';
 import { MeetingRemindersDto } from './meeting-reminders.dto';
 
@@ -61,7 +61,7 @@ export class CreateMeetingDto {
   @IsOptional()
   @Transform(({ value }) => emptyToUndefined(value))
   @IsIn([...MEETING_STATUSES], {
-    message: 'status doit être scheduled | confirmed | bon_qualified | done | cancelled | no_show',
+    message: `status doit être ${MEETING_STATUS_LABEL}`,
   })
   status?: string;
 
