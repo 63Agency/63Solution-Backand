@@ -37,4 +37,16 @@ export class BroadcastEmailDto {
   @ValidateNested({ each: true })
   @Type(() => BroadcastEmailRecipientDto)
   recipients!: BroadcastEmailRecipientDto[];
+
+  /** Métadonnée front (catalogue WA) — ignorée à l’envoi SMTP. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  templateId?: string;
+
+  /** Métadonnée front (ex. just_bonjour) — ignorée à l’envoi SMTP. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  templateName?: string;
 }

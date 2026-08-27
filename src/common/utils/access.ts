@@ -3,6 +3,7 @@ import type { AppUser } from '../../auth/types/app-user';
 import {
   canAccessLeads,
   canAccessMeetings,
+  canAccessWhatsapp,
   isFixedMeeting,
   isFullAdmin,
   isWhatsappAdmin,
@@ -32,12 +33,22 @@ export function assertCanAccessMeetings(user: AppUser): void {
   }
 }
 
+/** Même rôles que WhatsApp broadcast : admin + admin_whatsapp. */
+export function assertCanBroadcastEmail(user: AppUser): void {
+  if (!canAccessWhatsapp(user.role)) {
+    throw new ForbiddenException({
+      message: 'Accès à l’envoi email groupé non autorisé.',
+    });
+  }
+}
+
 /** Préfixes API autorisés pour le rôle admin_whatsapp (hors routes publiques). */
 const WHATSAPP_ADMIN_API_PREFIXES = [
   '/whatsapp',
   '/notifications',
   '/leads',
   '/meetings',
+  '/email',
   '/clickup/sync',
   '/auth/me',
   '/auth/change-password',

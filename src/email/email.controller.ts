@@ -17,7 +17,7 @@ import { EmailService } from './email.service';
 export class EmailController {
   constructor(private readonly email: EmailService) {}
 
-  /** Destinataires leads (email non vide), filtres listId / status. Admin only. */
+  /** Destinataires leads (email non vide). Auth = WhatsApp broadcast. */
   @Get('recipients')
   listRecipients(
     @Req() req: { user: AppUser },
@@ -28,8 +28,8 @@ export class EmailController {
   }
 
   /**
-   * Envoi bulk template HTML ({{name}}).
-   * Un email par destinataire — admin only.
+   * Envoi bulk HTML ({{name}}). Un email par destinataire.
+   * Auth = admin + admin_whatsapp (comme POST /whatsapp/broadcast).
    */
   @Post('broadcast')
   broadcast(

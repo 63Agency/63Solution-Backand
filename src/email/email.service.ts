@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { AppUser } from '../auth/types/app-user';
-import { assertFullAdmin } from '../common/utils/access';
+import { assertCanBroadcastEmail } from '../common/utils/access';
 import { SupabaseService } from '../supabase/supabase.service';
 import { BulkMailerService } from './bulk-mailer.service';
 import type { BroadcastEmailDto } from './dto/broadcast-email.dto';
@@ -18,7 +18,8 @@ export type EmailRecipient = {
 
 export type BroadcastEmailResultItem = {
   email: string;
-  status: 'sent' | 'failed';
+  name: string;
+  success: boolean;
   error?: string;
 };
 
@@ -33,9 +34,13 @@ function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
-/** Replace {{name}} (case-insensitive, optional spaces). */
+/**
+ * Remplace {{name}} (et {{1}} legacy WA) par destinataire.
+ */
 function applyNamePlaceholder(template: string, name: string): string {
-  return template.replace(/\{\{\s*name\s*\}\}/gi, name);
+  return template
+    .replace(/\{\{\s*name\s*\}\}/gi, name)
+    .replace(/\{\{\s*1\s*\}\}/g, name);
 }
 
 function htmlToText(html: string): string {
@@ -95,14 +100,15 @@ export class EmailService {
   }
 
   /**
-   * Leads ClickUp avec email non vide (colonne `email` / alias contact_email).
+   * Leads ClickUp avec email non vide.
    * Filtres optionnels list_id + status — même logique que le module leads.
+   * Auth : admin + admin_whatsapp (comme WhatsApp broadcast).
    */
   async listRecipients(
     user: AppUser,
     filters: { listId?: string; status?: string } = {},
   ): Promise<EmailRecipient[]> {
-    assertFullAdmin(user);
+    assertCanBroadcastEmail(user);
 
     const listId = filters.listId?.trim();
     const status = filters.status?.trim();
@@ -146,12 +152,9 @@ export class EmailService {
   }
 
   /**
-   * Envoi bulk one-by-one via BulkMailerService (BULK_SMTP_* / info@63agency.ma).
-   * Independent from meeting MailerService (SMTP_* / Contact63@…).
-   * Never falls back to the meeting SMTP account.
-   *
-   * SPF/DKIM/DMARC must be set on the bulk sending domain for inbox delivery —
-   * Nest does not configure DNS.
+   * Envoi bulk one-by-one via BulkMailerService (BULK_SMTP_*).
+   * Remplace {{name}} (et {{1}}) dans subject + html par destinataire.
+   * Auth : admin + admin_whatsapp.
    */
   async broadcast(
     user: AppUser,
@@ -162,7 +165,7 @@ export class EmailService {
     total: number;
     results: BroadcastEmailResultItem[];
   }> {
-    assertFullAdmin(user);
+    assertCanBroadcastEmail(user);
 
     const subjectTpl = clean(dto.subject);
     const htmlTpl = dto.html.trim();
@@ -171,6 +174,8 @@ export class EmailService {
         message: 'subject et html sont requis.',
       });
     }
+
+    const templateLabel = clean(dto.templateName) || clean(dto.templateId) || '-';
 
     // Deduplicate by email (keep first name).
     const byEmail = new Map<string, EmailRecipient>();
@@ -199,7 +204,7 @@ export class EmailService {
     let batchIndex = 0;
 
     this.logger.log(
-      `[BulkEmail] start total=${recipients.length} batchSize=${batchSize} delayMs=${delayMs}`,
+      `[BulkEmail] start template=${templateLabel} total=${recipients.length} batchSize=${batchSize} delayMs=${delayMs}`,
     );
 
     for (let i = 0; i < recipients.length; i += batchSize) {
@@ -221,7 +226,11 @@ export class EmailService {
             html,
             text,
           });
-          results.push({ email: recipient.email, status: 'sent' });
+          results.push({
+            email: recipient.email,
+            name: displayName,
+            success: true,
+          });
           sent += 1;
           batchSent += 1;
         } catch (err: unknown) {
@@ -231,7 +240,8 @@ export class EmailService {
           );
           results.push({
             email: recipient.email,
-            status: 'failed',
+            name: displayName,
+            success: false,
             error,
           });
           failed += 1;
@@ -249,7 +259,7 @@ export class EmailService {
     }
 
     this.logger.log(
-      `[BulkEmail] complete sent=${sent} failed=${failed} total=${recipients.length}`,
+      `[BulkEmail] complete template=${templateLabel} sent=${sent} failed=${failed} total=${recipients.length}`,
     );
 
     return {
