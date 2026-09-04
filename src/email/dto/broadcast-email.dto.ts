@@ -2,7 +2,6 @@ import { Type } from 'class-transformer';
 import {
   ArrayMinSize,
   IsArray,
-  IsEmail,
   IsOptional,
   IsString,
   MaxLength,
@@ -11,7 +10,11 @@ import {
 } from 'class-validator';
 
 export class BroadcastEmailRecipientDto {
-  @IsEmail({}, { message: 'email invalide' })
+  /**
+   * Soft validation: invalid / empty emails are skipped in EmailService
+   * (do not fail the whole broadcast). Prefer string over @IsEmail.
+   */
+  @IsString({ message: 'email invalide' })
   @MaxLength(200, { message: 'email trop long' })
   email!: string;
 

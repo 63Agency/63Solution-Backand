@@ -17,7 +17,10 @@ export const MEETING_TITLES = [
   'Audit Performance Marketing',
   'Audit Performance Marketing présentiel',
   'Audit Performance Marketing online',
+  'Appel téléphonique',
 ] as const;
+
+export const MEETING_TITLE_LABEL = MEETING_TITLES.join(' | ');
 
 export type MeetingTitle = (typeof MEETING_TITLES)[number];
 

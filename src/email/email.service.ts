@@ -3,13 +3,27 @@ import {
   HttpException,
   Injectable,
   Logger,
+  NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { AppUser } from '../auth/types/app-user';
-import { assertCanBroadcastEmail } from '../common/utils/access';
+import {
+  assertCanBroadcastEmail,
+  assertFullAdmin,
+} from '../common/utils/access';
 import { SupabaseService } from '../supabase/supabase.service';
 import { BulkMailerService } from './bulk-mailer.service';
+import {
+  appendBulkEmailSignature,
+  BULK_EMAIL_SIGNATURE_TEXT,
+} from './bulk-email-signature';
 import type { BroadcastEmailDto } from './dto/broadcast-email.dto';
+import type { UpsertEmailTemplateDto } from './dto/upsert-email-template.dto';
+import {
+  type EmailTemplateMapping,
+  type EmailTemplateRow,
+  mapEmailTemplateRow,
+} from './types/email-template.types';
 
 export type EmailRecipient = {
   email: string;
@@ -20,11 +34,15 @@ export type BroadcastEmailResultItem = {
   email: string;
   name: string;
   success: boolean;
+  messageId?: string;
   error?: string;
 };
 
 const DEFAULT_BATCH_SIZE = 20;
 const DEFAULT_BATCH_DELAY_MS = 1000;
+
+const EMAIL_TEMPLATE_SELECT =
+  'id, wa_template_name, subject, html_body, updated_at';
 
 function clean(value: string | null | undefined): string {
   return (value ?? '').trim();
@@ -97,6 +115,101 @@ export class EmailService {
 
   private delay(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  // ─── WA → email template mappings (composer pre-fill only) ───
+
+  async listTemplates(user: AppUser): Promise<EmailTemplateMapping[]> {
+    assertCanBroadcastEmail(user);
+
+    const { data, error } = await this.supabase
+      .getClient()
+      .from('email_templates')
+      .select(EMAIL_TEMPLATE_SELECT)
+      .order('wa_template_name', { ascending: true });
+
+    if (error) {
+      throw new ConflictException({ message: error.message });
+    }
+
+    const items = ((data ?? []) as EmailTemplateRow[]).map(mapEmailTemplateRow);
+    this.logger.log(`[EmailTemplates] list count=${items.length}`);
+    return items;
+  }
+
+  async getTemplateByWaName(
+    user: AppUser,
+    waTemplateName: string,
+  ): Promise<EmailTemplateMapping> {
+    assertCanBroadcastEmail(user);
+
+    const name = clean(waTemplateName);
+    if (!name) {
+      throw new NotFoundException({ message: 'Template email introuvable.' });
+    }
+
+    const { data, error } = await this.supabase
+      .getClient()
+      .from('email_templates')
+      .select(EMAIL_TEMPLATE_SELECT)
+      .eq('wa_template_name', name)
+      .maybeSingle();
+
+    if (error) {
+      throw new ConflictException({ message: error.message });
+    }
+    if (!data) {
+      throw new NotFoundException({
+        message: `Aucun mapping email pour le template WhatsApp « ${name} ».`,
+      });
+    }
+
+    return mapEmailTemplateRow(data as EmailTemplateRow);
+  }
+
+  async upsertTemplate(
+    user: AppUser,
+    waTemplateName: string,
+    dto: UpsertEmailTemplateDto,
+  ): Promise<EmailTemplateMapping> {
+    assertFullAdmin(user);
+
+    const name = clean(waTemplateName);
+    const subject = clean(dto.subject);
+    const htmlBody = dto.html_body.trim();
+    if (!name) {
+      throw new ConflictException({ message: 'waTemplateName requis.' });
+    }
+    if (!subject || !htmlBody) {
+      throw new ConflictException({
+        message: 'subject et html_body sont requis.',
+      });
+    }
+
+    const now = new Date().toISOString();
+    const { data, error } = await this.supabase
+      .getClient()
+      .from('email_templates')
+      .upsert(
+        {
+          wa_template_name: name,
+          subject,
+          html_body: htmlBody,
+          updated_at: now,
+        },
+        { onConflict: 'wa_template_name' },
+      )
+      .select(EMAIL_TEMPLATE_SELECT)
+      .single();
+
+    if (error || !data) {
+      throw new ConflictException({
+        message: error?.message ?? 'Upsert template email impossible.',
+      });
+    }
+
+    this.logger.log(`[EmailTemplates] upsert wa=${name}`);
+    return mapEmailTemplateRow(data as EmailTemplateRow);
   }
 
   /**
@@ -177,16 +290,27 @@ export class EmailService {
 
     const templateLabel = clean(dto.templateName) || clean(dto.templateId) || '-';
 
-    // Deduplicate by email (keep first name).
+    // Deduplicate by email (keep first name). Invalid emails → report + skip (do not abort).
     const byEmail = new Map<string, EmailRecipient>();
+    const results: BroadcastEmailResultItem[] = [];
+    let sent = 0;
+    let failed = 0;
+
     for (const r of dto.recipients) {
       const email = clean(r.email).toLowerCase();
-      if (!email || !isValidEmail(email)) continue;
+      const displayName = clean(r.name) || 'Client';
+      if (!email || !isValidEmail(email)) {
+        results.push({
+          email: clean(r.email) || '(vide)',
+          name: displayName,
+          success: false,
+          error: 'email invalide — ignoré',
+        });
+        failed += 1;
+        continue;
+      }
       if (byEmail.has(email)) continue;
-      byEmail.set(email, {
-        email,
-        name: clean(r.name) || 'Client',
-      });
+      byEmail.set(email, { email, name: displayName });
     }
 
     const recipients = [...byEmail.values()];
@@ -198,9 +322,6 @@ export class EmailService {
 
     const batchSize = this.batchSize();
     const delayMs = this.batchDelayMs();
-    const results: BroadcastEmailResultItem[] = [];
-    let sent = 0;
-    let failed = 0;
     let batchIndex = 0;
 
     this.logger.log(
@@ -216,20 +337,28 @@ export class EmailService {
       for (const recipient of batch) {
         const displayName = recipient.name || 'Client';
         const subject = applyNamePlaceholder(subjectTpl, displayName);
-        const html = applyNamePlaceholder(htmlTpl, displayName);
-        const text = htmlToText(html);
+        const html = appendBulkEmailSignature(
+          applyNamePlaceholder(htmlTpl, displayName),
+        );
+        const text =
+          htmlToText(applyNamePlaceholder(htmlTpl, displayName)) +
+          BULK_EMAIL_SIGNATURE_TEXT;
 
         try {
-          await this.bulkMailer.sendMail({
+          const mailResult = await this.bulkMailer.sendMail({
             to: recipient.email,
             subject,
             html,
             text,
           });
+          this.logger.log(
+            `[BulkEmail] sent email=${recipient.email} messageId=${mailResult.messageId || '-'}`,
+          );
           results.push({
             email: recipient.email,
             name: displayName,
             success: true,
+            messageId: mailResult.messageId || undefined,
           });
           sent += 1;
           batchSent += 1;
@@ -259,13 +388,13 @@ export class EmailService {
     }
 
     this.logger.log(
-      `[BulkEmail] complete template=${templateLabel} sent=${sent} failed=${failed} total=${recipients.length}`,
+      `[BulkEmail] complete template=${templateLabel} sent=${sent} failed=${failed} total=${sent + failed}`,
     );
 
     return {
       sent,
       failed,
-      total: recipients.length,
+      total: sent + failed,
       results,
     };
   }
