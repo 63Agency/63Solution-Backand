@@ -27,6 +27,22 @@ export type MeetingTitle = (typeof MEETING_TITLES)[number];
 export const DEFAULT_MEETING_TITLE: MeetingTitle =
   'Audit Performance Marketing';
 
+/** Titre RDV téléphone — pas de Google Meet. */
+export const PHONE_CALL_MEETING_TITLE: MeetingTitle = 'Appel téléphonique';
+
+export function isPhoneCallMeetingTitle(
+  title: string | null | undefined,
+): boolean {
+  return (title ?? '').trim() === PHONE_CALL_MEETING_TITLE;
+}
+
+/** Décision rappels / templates : présence d’un vrai lien Meet (https). */
+export function hasMeetingMeetLink(
+  meeting: { meetLink?: string | null } | null | undefined,
+): boolean {
+  return /^https:\/\//i.test((meeting?.meetLink ?? '').trim());
+}
+
 /**
  * Jobs auto + envois manuels : gardés pour ces statuts.
  * Annulés pour : cancelled | done | no_show | reported | non_qualified.

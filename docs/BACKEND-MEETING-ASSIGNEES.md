@@ -72,7 +72,7 @@ Champ `title` (string) — valeurs exactes à la création / édition :
 - `Audit Performance Marketing` (défaut front)
 - `Audit Performance Marketing présentiel`
 - `Audit Performance Marketing online`
-- `Appel téléphonique`
+- `Appel téléphonique` — **pas de Google Meet** ; rappels WA/email sans lien Meet
 
 Les RDV legacy avec un autre titre restent lisibles ; un `PATCH` doit forcer une des 4 valeurs.  
 WhatsApp / email utilisent `meeting.title` tel quel.

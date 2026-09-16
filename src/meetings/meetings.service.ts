@@ -39,7 +39,7 @@ import type {
   MeetingRow,
   MeetingStatus,
 } from './types/meeting.types';
-import { keepsReminderJobs } from './types/meeting.types';
+import { keepsReminderJobs, isPhoneCallMeetingTitle } from './types/meeting.types';
 import {
   casablancaDayBounds,
   casablancaWeekBounds,
@@ -739,7 +739,10 @@ export class MeetingsService {
     );
     await this.assertUsersExist(assignedUserIds);
 
-    const meet = await this.googleMeet.createSpace();
+    // Appel téléphonique → pas de Google Meet.
+    const meet = isPhoneCallMeetingTitle(title)
+      ? null
+      : await this.googleMeet.createSpace();
     const meetingDateIso = new Date(meetingDate).toISOString();
     await this.blockedDays.assertMeetingDateNotBlocked(meetingDateIso);
 
@@ -873,7 +876,14 @@ export class MeetingsService {
 
   async regenerateMeetLink(id: string, user: AppUser) {
     assertFullAdmin(user);
-    await this.findRowOrThrow(id);
+    const existing = await this.findRowOrThrow(id);
+
+    if (isPhoneCallMeetingTitle(existing.title)) {
+      throw new ConflictException({
+        message:
+          'Les rendez-vous « Appel téléphonique » n’ont pas de lien Google Meet.',
+      });
+    }
 
     const meet = await this.googleMeet.createSpace();
     if (!meet) {
@@ -906,8 +916,13 @@ export class MeetingsService {
     const rows = (data ?? []) as MeetingRow[];
     let updated = 0;
     let failed = 0;
+    let skipped = 0;
 
     for (const row of rows) {
+      if (isPhoneCallMeetingTitle(row.title)) {
+        skipped += 1;
+        continue;
+      }
       try {
         const meet = await this.googleMeet.createSpace();
         if (!meet) {
@@ -940,9 +955,9 @@ export class MeetingsService {
     }
 
     this.logger.log(
-      `[MeetBackfill] found=${rows.length} updated=${updated} failed=${failed}`,
+      `[MeetBackfill] found=${rows.length} updated=${updated} failed=${failed} skippedPhone=${skipped}`,
     );
-    return { found: rows.length, updated, failed };
+    return { found: rows.length, updated, failed, skipped };
   }
 
   async update(id: string, dto: UpdateMeetingDto, user: AppUser) {
@@ -962,6 +977,19 @@ export class MeetingsService {
         throw new BadRequestException({ message: 'title requis' });
       }
       patch.title = title;
+
+      // Téléphone → retirer Meet. Autre titre sans Meet → en créer un.
+      if (isPhoneCallMeetingTitle(title)) {
+        patch.meet_link = null;
+        patch.meet_space = null;
+      } else if (
+        isPhoneCallMeetingTitle(existing.title) ||
+        !existing.meet_link
+      ) {
+        const meet = await this.googleMeet.createSpace();
+        patch.meet_link = meet?.meetLink ?? null;
+        patch.meet_space = meet?.spaceName ?? null;
+      }
     }
 
     if (dto.meetingDate !== undefined) {

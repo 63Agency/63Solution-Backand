@@ -14,7 +14,7 @@ import type {
   ReminderJobStatus,
   ReminderOffset,
 } from './types/meeting.types';
-import { keepsReminderJobs } from './types/meeting.types';
+import { keepsReminderJobs, hasMeetingMeetLink, isPhoneCallMeetingTitle } from './types/meeting.types';
 import {
   firstNameOnly,
   formatMeetingDate,
@@ -49,6 +49,7 @@ type ChannelSendResult = {
 const MANUAL_IDEMPOTENCY_MS = 5 * 60 * 1000;
 
 const DEFAULT_MEETING_WA_TEMPLATE = 'meeting_reminder_util';
+const DEFAULT_MEETING_WA_NOLINK_TEMPLATE = 'meeting_reminder_nolink_util';
 const MEETING_WA_LANG = 'fr';
 
 function extractErrorMessage(err: unknown): string {
@@ -136,6 +137,14 @@ export class MeetingsReminderService {
   private get meetingWaTemplate(): string {
     const fromEnv = this.config.get<string>('WA_MEETING_REMINDER_TEMPLATE')?.trim();
     return fromEnv || DEFAULT_MEETING_WA_TEMPLATE;
+  }
+
+  /** Template sans lien Meet (appels téléphoniques) — WA_MEETING_REMINDER_NOLINK_TEMPLATE. */
+  private get meetingWaNoLinkTemplate(): string {
+    const fromEnv = this.config
+      .get<string>('WA_MEETING_REMINDER_NOLINK_TEMPLATE')
+      ?.trim();
+    return fromEnv || DEFAULT_MEETING_WA_NOLINK_TEMPLATE;
   }
 
   /** Every 5 minutes — process pending reminder jobs. */
@@ -599,8 +608,13 @@ export class MeetingsReminderService {
       (channels.whatsapp && waRecipients.length > 0) ||
       (channels.email && emailRecipients.length > 0)
     ) {
+      // Online only — phone-call titles skip Meet generation inside ensureMeetLink.
       current = await this.ensureMeetLink(current);
     }
+
+    let templateUsed = hasMeetingMeetLink(current)
+      ? this.meetingWaTemplate
+      : this.meetingWaNoLinkTemplate;
 
     if (channels.whatsapp) {
       if (waRecipients.length === 0) {
@@ -615,6 +629,7 @@ export class MeetingsReminderService {
         whatsappError = wa.error;
         whatsappMetaIds = wa.metaIds;
         whatsappWarning = wa.warning;
+        templateUsed = wa.templateUsed;
         if (!wa.sent) failures += 1;
       }
     }
@@ -640,7 +655,7 @@ export class MeetingsReminderService {
       whatsappError,
       emailError,
       whatsappMetaIds,
-      whatsappTemplate: `${this.meetingWaTemplate}/${MEETING_WA_LANG}`,
+      whatsappTemplate: `${templateUsed}/${MEETING_WA_LANG}`,
       whatsappWarning,
     };
   }
@@ -764,8 +779,17 @@ export class MeetingsReminderService {
     }
   }
 
+  /**
+   * Ensure Meet link for online meetings only.
+   * Phone-call RDV (or intentional null meet_link for phone titles) stay without a link.
+   */
   private async ensureMeetLink(meeting: Meeting): Promise<Meeting> {
-    if (meeting.meetLink?.trim()) {
+    if (hasMeetingMeetLink(meeting)) {
+      return meeting;
+    }
+
+    // Ne jamais générer Meet pour un appel téléphonique.
+    if (isPhoneCallMeetingTitle(meeting.title)) {
       return meeting;
     }
 
@@ -803,6 +827,7 @@ export class MeetingsReminderService {
     error: string | null;
     metaIds: string[];
     warning: string | null;
+    templateUsed: string;
   }> {
     const recipients = meetingWhatsappRecipients(meeting);
     if (recipients.length === 0) {
@@ -811,25 +836,37 @@ export class MeetingsReminderService {
         error: 'pas de téléphone (contactPhone / members[].phone)',
         metaIds: [],
         warning: null,
+        templateUsed: this.meetingWaTemplate,
       };
     }
 
-    // Template: WA_MEETING_REMINDER_TEMPLATE (default meeting_reminder_util) / fr
-    // Body vars: {{1}} nom, {{2}} date, {{3}} heure, {{4}} lien Meet (https URL)
-    const templateName = this.meetingWaTemplate;
     const { date, time } = formatMeetingDate(meeting.meetingDate);
-    let meetLink = meeting.meetLink?.trim() || '';
-    if (!/^https:\/\//i.test(meetLink)) {
-      // Retry Meet generation once more before failing — Meta rejects non-URL {{4}}.
-      const refreshed = await this.ensureMeetLink(meeting);
-      meetLink = refreshed.meetLink?.trim() || '';
+
+    // Retry Meet generation only for online meetings; phone calls stay without link.
+    let current = meeting;
+    if (!hasMeetingMeetLink(current) && !isPhoneCallMeetingTitle(current.title)) {
+      current = await this.ensureMeetLink(current);
     }
-    if (!/^https:\/\//i.test(meetLink)) {
+
+    const withLink = hasMeetingMeetLink(current);
+    const templateName = withLink
+      ? this.meetingWaTemplate
+      : this.meetingWaNoLinkTemplate;
+    const meetLink = (current.meetLink ?? '').trim();
+
+    // Link template requires https URL as {{4}}; no-link template uses 3 params only.
+    if (withLink && !/^https:\/\//i.test(meetLink)) {
       const error = `meet_link manquant ou invalide — le template ${templateName} exige une URL https pour {{4}}`;
       this.logger.warn(
         `[MeetingsReminder] WhatsApp skip id=${meeting.id} — ${error}`,
       );
-      return { sent: false, error, metaIds: [], warning: null };
+      return {
+        sent: false,
+        error,
+        metaIds: [],
+        warning: null,
+        templateUsed: templateName,
+      };
     }
 
     let anySent = false;
@@ -839,15 +876,17 @@ export class MeetingsReminderService {
     for (const recipient of recipients) {
       const prenom = firstNameOnly(recipient.name) || 'Client';
       // Avoid special dashes — Meta can reject some unicode in body params.
-      const params = [
+      const baseParams = [
         prenom,
         (date || '-').replace(/—/g, '-'),
         (time || '-').replace(/—/g, '-'),
-        meetLink,
       ].map((t) => t.trim() || '-');
+      const params = withLink
+        ? [...baseParams, meetLink.trim() || '-']
+        : baseParams;
 
       this.logger.log(
-        `[WA SEND] meeting reminder prep to="${recipient.phone}" (from contactPhone/members via normalizeMeetingPhone) template=${templateName} meetingId=${meeting.id} params=${JSON.stringify(params)}`,
+        `[WA SEND] meeting reminder prep to="${recipient.phone}" template=${templateName} meetingId=${meeting.id} withLink=${withLink} params=${JSON.stringify(params)}`,
       );
 
       try {
@@ -880,6 +919,7 @@ export class MeetingsReminderService {
       error: anySent ? null : lastError || 'envoi WhatsApp échoué',
       metaIds,
       warning: null,
+      templateUsed: templateName,
     };
   }
 
@@ -895,7 +935,8 @@ export class MeetingsReminderService {
     }
 
     const { date, time } = formatMeetingDate(meeting.meetingDate);
-    const meetLink = meeting.meetLink?.trim() || '';
+    const withLink = hasMeetingMeetLink(meeting);
+    const meetLink = (meeting.meetLink ?? '').trim();
     let anySent = false;
     let lastError: string | null = null;
 
@@ -909,8 +950,13 @@ export class MeetingsReminderService {
         `Heure : ${time}`,
       ];
 
-      if (meetLink) {
+      if (withLink) {
         lines.push('', 'Rejoindre la réunion :', meetLink);
+      } else {
+        lines.push(
+          '',
+          'Il s’agit d’un appel téléphonique : nous vous contacterons au numéro indiqué.',
+        );
       }
 
       lines.push(
@@ -929,7 +975,7 @@ export class MeetingsReminderService {
         });
         anySent = true;
         this.logger.log(
-          `[MeetingsReminder] Email OK id=${meeting.id} to=${recipient.email}`,
+          `[MeetingsReminder] Email OK id=${meeting.id} to=${recipient.email} withLink=${withLink}`,
         );
       } catch (err) {
         lastError = extractErrorMessage(err);
