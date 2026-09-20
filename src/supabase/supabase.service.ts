@@ -1,6 +1,63 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Pool } from 'pg';
+import { Pool, types as pgTypes } from 'pg';
+
+/** Postgres type OIDs — return strings like PostgREST/supabase-js (not JS Date). */
+const PG_OID = {
+  DATE: 1082,
+  TIME: 1083,
+  TIMESTAMP: 1114,
+  TIMESTAMPTZ: 1184,
+  TIMETZ: 1266,
+  NUMERIC: 1700,
+  // INT8/bigint = 20 — left as pg default (string). Our PKs are uuid; amounts use Number().
+} as const;
+
+/**
+ * Make a Postgres timestamp string parseable by `new Date()`.
+ * e.g. "2026-09-20 11:00:00+00" → "2026-09-20T11:00:00.000Z"
+ */
+function pgTimestampToIsoString(raw: string): string {
+  let s = raw.trim();
+  if (!s) return s;
+
+  // Space → T (ISO 8601)
+  if (!s.includes('T')) {
+    s = s.replace(' ', 'T');
+  }
+
+  // +HH / -HH → +HH:00 ; +HHMM → +HH:MM
+  s = s.replace(/([+-])(\d{2})$/, (_, sign: string, hh: string) => `${sign}${hh}:00`);
+  s = s.replace(
+    /([+-])(\d{2})(\d{2})$/,
+    (_, sign: string, hh: string, mm: string) => `${sign}${hh}:${mm}`,
+  );
+
+  // Normalize UTC offset to Z (clearest for Date.parse)
+  if (s.endsWith('+00:00') || s.endsWith('-00:00')) {
+    s = `${s.slice(0, -6)}Z`;
+  }
+
+  return s;
+}
+
+/** Once per process — before any Pool is created. */
+function configurePgTypeParsers(): void {
+  pgTypes.setTypeParser(PG_OID.TIMESTAMP, (val: string) =>
+    pgTimestampToIsoString(val),
+  );
+  pgTypes.setTypeParser(PG_OID.TIMESTAMPTZ, (val: string) =>
+    pgTimestampToIsoString(val),
+  );
+  // date → "YYYY-MM-DD" (already Date-parseable)
+  pgTypes.setTypeParser(PG_OID.DATE, (val: string) => val);
+  pgTypes.setTypeParser(PG_OID.TIME, (val: string) => val);
+  pgTypes.setTypeParser(PG_OID.TIMETZ, (val: string) => val);
+  // numeric as string (PostgREST parity; services already use Number(...))
+  pgTypes.setTypeParser(PG_OID.NUMERIC, (val: string) => val);
+}
+
+configurePgTypeParsers();
 
 /** Shape matching @supabase/supabase-js query responses (loosely typed like PostgREST client). */
 export type PgQueryError = {
