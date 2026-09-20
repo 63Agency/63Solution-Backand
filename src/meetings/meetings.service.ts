@@ -461,7 +461,13 @@ export class MeetingsService {
       throw new ConflictException({ message: error.message });
     }
 
-    return [...new Set((data ?? []).map((row) => String(row.meeting_id)))];
+    return [
+      ...new Set(
+        ((data ?? []) as Array<{ meeting_id: string }>).map((row) =>
+          String(row.meeting_id),
+        ),
+      ),
+    ];
   }
 
   /** `null` = pas de filtre (admin / admin_whatsapp). Sinon liste d’ids. */

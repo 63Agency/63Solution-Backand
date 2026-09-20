@@ -2,15 +2,17 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Pool } from 'pg';
 
-/** Shape matching @supabase/supabase-js query responses. */
+/** Shape matching @supabase/supabase-js query responses (loosely typed like PostgREST client). */
 export type PgQueryError = {
   message: string;
   code?: string;
   details?: string;
 };
 
-export type PgQueryResult<T = unknown> = {
-  data: T;
+export type PgQueryResult = {
+  // `any` mirrors supabase-js — consumers cast/map rows without generics.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  data: any;
   error: PgQueryError | null;
   count: number | null;
 };
