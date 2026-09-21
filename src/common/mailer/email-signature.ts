@@ -1,45 +1,70 @@
 /**
- * Signature email partagée (carte de visite HTML) — bulk + contact.
- * Compatible Gmail / Outlook : tables + CSS inline uniquement.
+ * Signature email partagée (bulk + contact).
+ * Tables + CSS inline (Gmail / Outlook).
  *
- * Logo Cloudinary « 63 » carré : ABSENT du repo (seule image = ancienne
- * bannière saad-chahoubi-bulk.png). On rend un carré noir « 63 » en HTML.
- *
- * URLs sociales profil : ABSENTES du code (seulement des labels texte).
- * Rangée icônes non rendue tant qu’aucune URL n’est fournie.
+ * Logo « 63 » : carré noir HTML (pas d’asset Cloudinary dédié dans le repo).
+ * Sociaux sous le logo : WhatsApp, Facebook, Instagram.
  */
 
 const CONTACT_PHONE_DISPLAY = '+212 6 06 67 67 10';
 const CONTACT_PHONE_TEL = '+212606676710';
 const CONTACT_EMAIL = 'contact@63agency.ma';
-/** Site vitrine (présent dans cors-origins + contact templates). */
 const CONTACT_WEBSITE_URL = 'https://www.63agency.com';
 const CONTACT_WEBSITE_LABEL = '63agency.com';
 
 /**
- * Social profile URLs found in codebase: NONE.
- * Labels only existed in contact-email.templates.ts ("LinkedIn · Instagram · Facebook").
- * Missing (do not invent): Facebook, X, LinkedIn, Instagram, TikTok, WhatsApp, YouTube, Google/Maps.
+ * Liens sociaux (homepage 63agency.com, mars 2026).
+ * Facebook : absente du site → icône sans lien profil.
  */
-export const EMAIL_SIGNATURE_SOCIAL_URLS: Record<string, string | null> = {
-  facebook: null,
-  x: null,
-  linkedin: null,
-  instagram: null,
-  tiktok: null,
-  whatsapp: null,
-  youtube: null,
-  googleMaps: null,
-};
+const SOCIAL = {
+  whatsapp: 'https://wa.me/212720007007',
+  instagram: 'https://www.instagram.com/',
+  facebook: null as string | null,
+} as const;
 
-/** Petit logo « 63 » — carré noir, texte blanc (fallback HTML, pas d’URL Cloudinary dédiée). */
-function logo63Cell(): string {
+/** Icônes PNG (Icons8 CDN) — plus fiables que SVG dans Gmail/Outlook. */
+const ICON_PNG = {
+  whatsapp: 'https://img.icons8.com/color/48/whatsapp--v1.png',
+  facebook: 'https://img.icons8.com/color/48/facebook-new.png',
+  instagram: 'https://img.icons8.com/color/48/instagram-new--v1.png',
+} as const;
+function socialIconCell(
+  href: string | null,
+  src: string,
+  alt: string,
+): string {
+  const img = `<img src="${src}" alt="${alt}" width="22" height="22" style="display:block;border:0;outline:none;text-decoration:none;width:22px;height:22px;" />`;
+  if (!href) {
+    return `<td style="padding:0 6px 0 0;vertical-align:middle;">${img}</td>`;
+  }
+  return `<td style="padding:0 6px 0 0;vertical-align:middle;"><a href="${href}" target="_blank" rel="noopener noreferrer" style="text-decoration:none;border:0;">${img}</a></td>`;
+}
+
+/** Colonne gauche : logo 63 + 3 icônes sociales en dessous. */
+function logoAndSocialsCell(): string {
   return `
-<td width="72" valign="top" style="padding:0 20px 0 0;vertical-align:top;">
-  <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="64" height="64" style="border-collapse:collapse;width:64px;height:64px;background-color:#111111;border-radius:10px;">
+<td width="80" valign="top" style="padding:0 18px 0 0;vertical-align:top;">
+  <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
     <tr>
-      <td align="center" valign="middle" width="64" height="64" style="width:64px;height:64px;background-color:#111111;border-radius:10px;color:#ffffff;font-family:Arial,Helvetica,sans-serif;font-size:22px;font-weight:700;letter-spacing:-0.5px;line-height:64px;text-align:center;">
-        63
+      <td align="center" style="padding:0 0 10px 0;">
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="64" height="64" style="border-collapse:collapse;width:64px;height:64px;background-color:#111111;border-radius:10px;">
+          <tr>
+            <td align="center" valign="middle" width="64" height="64" style="width:64px;height:64px;background-color:#111111;border-radius:10px;color:#ffffff;font-family:Arial,Helvetica,sans-serif;font-size:22px;font-weight:700;letter-spacing:-0.5px;line-height:64px;text-align:center;">
+              63
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+    <tr>
+      <td align="center" style="padding:0;">
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin:0 auto;">
+          <tr>
+            ${socialIconCell(SOCIAL.whatsapp, ICON_PNG.whatsapp, 'WhatsApp')}
+            ${socialIconCell(SOCIAL.facebook, ICON_PNG.facebook, 'Facebook')}
+            ${socialIconCell(SOCIAL.instagram, ICON_PNG.instagram, 'Instagram')}
+          </tr>
+        </table>
       </td>
     </tr>
   </table>
@@ -61,24 +86,17 @@ function contactRowsHtml(): string {
 }
 
 /**
- * Bloc signature HTML (carte blanche, coins arrondis).
- * Pas de grande image-signature ; pas de liens sociaux inventés.
+ * Signature sans fond ni cadre — logo + textes + icônes sous le logo.
  */
 export function emailSignatureHtml(): string {
   return `
 <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;width:100%;max-width:600px;margin-top:28px;">
   <tr>
-    <td style="padding:0;">
-      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;width:100%;max-width:600px;background-color:#ffffff;border:1px solid #eeeeee;border-radius:12px;">
+    <td style="padding:0;background:transparent;">
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;width:100%;max-width:600px;background:transparent;border:0;">
         <tr>
-          <td style="padding:20px 22px;">
-            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;width:100%;">
-              <tr>
-                ${logo63Cell()}
-                ${contactRowsHtml()}
-              </tr>
-            </table>
-          </td>
+          ${logoAndSocialsCell()}
+          ${contactRowsHtml()}
         </tr>
       </table>
     </td>
@@ -86,7 +104,6 @@ export function emailSignatureHtml(): string {
 </table>`.trim();
 }
 
-/** Équivalent plain-text (multipart / clients sans HTML). */
 export function emailSignatureText(): string {
   return `
 
@@ -94,5 +111,7 @@ export function emailSignatureText(): string {
 Saad CHAHOUBI | Founder | 63 AGENCY
 ${CONTACT_PHONE_DISPLAY}
 ${CONTACT_EMAIL}
-${CONTACT_WEBSITE_LABEL}`;
+${CONTACT_WEBSITE_LABEL}
+WhatsApp: ${SOCIAL.whatsapp}
+Instagram: ${SOCIAL.instagram}`;
 }
