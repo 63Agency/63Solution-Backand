@@ -2,7 +2,7 @@
  * Signature email partagée (bulk + contact).
  * Tables + CSS inline (Gmail / Outlook).
  *
- * Logo « 63 » : carré noir HTML (pas d’asset Cloudinary dédié dans le repo).
+ * Logo : public/images/IMG_1260.JPEG (servi en static) ou EMAIL_SIGNATURE_LOGO_URL.
  * Sociaux sous le logo : WhatsApp, Facebook, Instagram.
  */
 
@@ -13,21 +13,40 @@ const CONTACT_WEBSITE_URL = 'https://www.63agency.com';
 const CONTACT_WEBSITE_LABEL = '63agency.com';
 
 /**
- * Liens sociaux (homepage 63agency.com, mars 2026).
- * Facebook : absente du site → icône sans lien profil.
+ * Liens sociaux (homepage 63agency.com).
+ * Sous le logo : WhatsApp + Instagram uniquement.
  */
 const SOCIAL = {
   whatsapp: 'https://wa.me/212720007007',
   instagram: 'https://www.instagram.com/',
-  facebook: null as string | null,
 } as const;
 
 /** Icônes PNG (Icons8 CDN) — plus fiables que SVG dans Gmail/Outlook. */
 const ICON_PNG = {
   whatsapp: 'https://img.icons8.com/color/48/whatsapp--v1.png',
-  facebook: 'https://img.icons8.com/color/48/facebook-new.png',
   instagram: 'https://img.icons8.com/color/48/instagram-new--v1.png',
 } as const;
+
+/** Chemin static servi par Nest : /images/IMG_1260.JPEG */
+const LOGO_STATIC_PATH = '/images/IMG_1260.JPEG';
+
+/**
+ * URL absolue obligatoire pour les clients mail.
+ * Priorité : EMAIL_SIGNATURE_LOGO_URL → API_PUBLIC_URL + /images/…
+ */
+function resolveLogoUrl(): string {
+  const explicit = process.env.EMAIL_SIGNATURE_LOGO_URL?.trim();
+  if (explicit) return explicit;
+
+  const base = (
+    process.env.API_PUBLIC_URL?.trim() ||
+    process.env.PUBLIC_API_URL?.trim() ||
+    'https://api.63agency.com'
+  ).replace(/\/+$/, '');
+
+  return `${base}${LOGO_STATIC_PATH}`;
+}
+
 function socialIconCell(
   href: string | null,
   src: string,
@@ -40,20 +59,15 @@ function socialIconCell(
   return `<td style="padding:0 6px 0 0;vertical-align:middle;"><a href="${href}" target="_blank" rel="noopener noreferrer" style="text-decoration:none;border:0;">${img}</a></td>`;
 }
 
-/** Colonne gauche : logo 63 + 3 icônes sociales en dessous. */
+/** Colonne gauche : logo image 63 + 3 icônes sociales en dessous. */
 function logoAndSocialsCell(): string {
+  const logoUrl = resolveLogoUrl();
   return `
 <td width="80" valign="top" style="padding:0 18px 0 0;vertical-align:top;">
   <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
     <tr>
       <td align="center" style="padding:0 0 10px 0;">
-        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="64" height="64" style="border-collapse:collapse;width:64px;height:64px;background-color:#111111;border-radius:10px;">
-          <tr>
-            <td align="center" valign="middle" width="64" height="64" style="width:64px;height:64px;background-color:#111111;border-radius:10px;color:#ffffff;font-family:Arial,Helvetica,sans-serif;font-size:22px;font-weight:700;letter-spacing:-0.5px;line-height:64px;text-align:center;">
-              63
-            </td>
-          </tr>
-        </table>
+        <img src="${logoUrl}" alt="63 Agency" width="64" height="64" style="display:block;border:0;outline:none;text-decoration:none;width:64px;height:64px;border-radius:10px;" />
       </td>
     </tr>
     <tr>
@@ -61,7 +75,6 @@ function logoAndSocialsCell(): string {
         <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin:0 auto;">
           <tr>
             ${socialIconCell(SOCIAL.whatsapp, ICON_PNG.whatsapp, 'WhatsApp')}
-            ${socialIconCell(SOCIAL.facebook, ICON_PNG.facebook, 'Facebook')}
             ${socialIconCell(SOCIAL.instagram, ICON_PNG.instagram, 'Instagram')}
           </tr>
         </table>
@@ -86,7 +99,7 @@ function contactRowsHtml(): string {
 }
 
 /**
- * Signature sans fond ni cadre — logo + textes + icônes sous le logo.
+ * Signature sans fond ni cadre — logo image + textes + icônes sous le logo.
  */
 export function emailSignatureHtml(): string {
   return `

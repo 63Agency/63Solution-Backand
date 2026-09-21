@@ -1,6 +1,7 @@
 import { BadRequestException, Logger, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
+import { join } from 'node:path';
 import { AppModule } from './app.module';
 import { isCorsOriginAllowed } from './common/cors-origins';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
@@ -13,6 +14,10 @@ async function bootstrap() {
     rawBody: true,
   });
   // socket.io partage le même port HTTP (pas d'IoAdapter custom requis).
+  // Assets publics (logo signature email, etc.) — ex. /images/IMG_1260.JPEG
+  app.useStaticAssets(join(process.cwd(), 'public'), {
+    prefix: '/',
+  });
   app.enableCors({
     origin: (origin, callback) => {
       // Do not pass Error here — Nest's global filter would respond without CORS headers.
