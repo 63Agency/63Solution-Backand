@@ -8,6 +8,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import type { AppUser } from '../auth/types/app-user';
 import { assertCanAccessLeads } from '../common/utils/access';
+import { RealtimeService } from '../realtime/realtime.service';
 import { SupabaseService } from '../supabase/supabase.service';
 import type { ClickUpLead } from './types/clickup.types';
 import {
@@ -89,6 +90,7 @@ export class ClickupService {
   constructor(
     private readonly supabase: SupabaseService,
     private readonly config: ConfigService,
+    private readonly realtime: RealtimeService,
   ) {}
 
   private getApiToken(): string {
@@ -333,6 +335,8 @@ export class ClickupService {
       });
     }
 
+    const existed = await this.leadExistsByClickupTaskId(mapped.id);
+
     const row = {
       clickup_task_id: mapped.id,
       name: mapped.name,
@@ -359,10 +363,20 @@ export class ClickupService {
       });
     }
 
+    const lead = mapLeadRow(data as LeadRow);
     this.logger.log(
-      `ClickUp lead saved id=${(data as LeadRow).id} clickup_task_id=${mapped.id} status=${mapped.status ?? ''} list=${mapped.listName ?? ''}`,
+      `ClickUp lead saved id=${lead.id} clickup_task_id=${mapped.id} status=${mapped.status ?? ''} list=${mapped.listName ?? ''} created=${!existed}`,
     );
-    return mapLeadRow(data as LeadRow);
+
+    try {
+      if (existed) this.realtime.emitLeadUpdated(lead);
+      else this.realtime.emitLeadCreated(lead);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`Realtime emit failed for lead ${lead.id}: ${message}`);
+    }
+
+    return lead;
   }
 
   async handleWebhookEvent(payload: Record<string, unknown>): Promise<ClickUpLead | null> {

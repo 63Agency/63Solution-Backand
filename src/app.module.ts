@@ -20,6 +20,7 @@ import { UsersModule } from './users/users.module';
 import { WhatsappModule } from './whatsapp/whatsapp.module';
 import { WhatsappAdminAccessInterceptor } from './common/interceptors/whatsapp-admin-access.interceptor';
 import { LeadsModule } from './leads/leads.module';
+import { RealtimeModule } from './realtime/realtime.module';
 
 @Module({
   imports: [
@@ -31,6 +32,7 @@ import { LeadsModule } from './leads/leads.module';
     ThrottlerModule.forRoot([{ ttl: 60_000, limit: 120 }]),
     SupabaseModule,
     AuthModule,
+    RealtimeModule,
     ClickupModule,
     CloudinaryModule,
     ClientsModule,

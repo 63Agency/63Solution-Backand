@@ -31,6 +31,7 @@ import { JwtStrategy } from './jwt.strategy';
   ],
   controllers: [AuthController],
   providers: [AuthService, JwtStrategy],
-  exports: [AuthService],
+  /** JwtModule exporté pour auth WebSocket (RealtimeGateway). */
+  exports: [AuthService, JwtModule],
 })
 export class AuthModule {}

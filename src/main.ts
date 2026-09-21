@@ -2,6 +2,7 @@ import { BadRequestException, Logger, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
+import { isCorsOriginAllowed } from './common/cors-origins';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { flattenValidationErrors } from './common/utils/validation-errors';
 
@@ -11,19 +12,15 @@ async function bootstrap() {
     logger: ['error', 'warn', 'log', 'debug', 'verbose'],
     rawBody: true,
   });
+  // socket.io partage le même port HTTP (pas d'IoAdapter custom requis).
   app.enableCors({
     origin: (origin, callback) => {
-      const allowed = [
-        'https://app.63agency.com',
-        'http://localhost:3000',
-        'http://localhost:3001',
-      ];
       // Do not pass Error here — Nest's global filter would respond without CORS headers.
-      if (!origin || allowed.includes(origin)) {
+      if (isCorsOriginAllowed(origin)) {
         callback(null, true);
       } else {
         callback(null, false);
-      } 
+      }
     },
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Authorization', 'Content-Type'],
