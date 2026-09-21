@@ -45,13 +45,22 @@ export class ClickupController {
     @Body() body: Record<string, unknown>,
   ) {
     const payload = body ?? {};
-    const rawBody =
-      req.rawBody?.toString('utf8') ?? JSON.stringify(payload);
     const signature = req.headers['x-signature'];
     const secret =
       this.config.get<string>('CLICKUP_WEBHOOK_SECRET')?.trim() ?? '';
 
     if (secret) {
+      // ClickUp signe les octets bruts — jamais JSON.stringify(body) (ordre/espaces ≠ payload).
+      const rawBody = req.rawBody;
+      if (!rawBody || !Buffer.isBuffer(rawBody) || rawBody.length === 0) {
+        this.logger.warn(
+          '[ClickUp webhook] rawBody manquant — impossible de vérifier X-Signature (Nest rawBody: true requis)',
+        );
+        throw new ForbiddenException({
+          message: 'Signature webhook invalide (raw body manquant)',
+        });
+      }
+
       const sig = Array.isArray(signature) ? signature[0] : signature;
       const valid = verifyClickUpSignature(
         typeof sig === 'string' ? sig : undefined,
@@ -59,7 +68,9 @@ export class ClickupController {
         secret,
       );
       if (!valid) {
-        this.logger.warn('[ClickUp webhook] invalid X-Signature');
+        this.logger.warn(
+          `[ClickUp webhook] invalid X-Signature rawBodyLength=${rawBody.length} headerPresent=${Boolean(sig)}`,
+        );
         throw new ForbiddenException({ message: 'Signature webhook invalide' });
       }
     }
