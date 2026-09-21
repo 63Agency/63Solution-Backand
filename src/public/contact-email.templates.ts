@@ -1,5 +1,7 @@
-const LOGO_URL =
-  'https://res.cloudinary.com/dtxrsmnub/image/upload/w_180,q_auto,f_auto/v1788002378/email-signatures/saad-chahoubi-bulk.png';
+import {
+  emailSignatureHtml,
+  emailSignatureText,
+} from '../common/mailer/email-signature';
 
 function escapeHtml(value: string): string {
   return value
@@ -14,26 +16,9 @@ function firstName(fullName: string): string {
   return part || 'client';
 }
 
-/** Signature HTML (client + admin). */
+/** Signature HTML partagée (client + admin). */
 export function contactEmailSignatureHtml(): string {
-  return `
-<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin-top:28px;border-collapse:collapse;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#222;">
-  <tr>
-    <td style="padding-bottom:12px;">
-      <img src="${LOGO_URL}" alt="63 Agency" width="180" style="display:block;border:0;max-width:180px;height:auto;" />
-    </td>
-  </tr>
-  <tr>
-    <td style="padding:0;line-height:1.5;">
-      <strong>Saad CHAHOUBI</strong><br />
-      Fondateur — 63 Agency<br />
-      <a href="tel:+212606676710" style="color:#222;text-decoration:none;">+212 6 06 67 67 10</a><br />
-      <a href="mailto:Contact@63agency.ma" style="color:#222;">Contact@63agency.ma</a><br />
-      <a href="https://www.63agency.com" style="color:#222;">www.63agency.com</a><br />
-      <span style="color:#666;">LinkedIn · Instagram · Facebook</span>
-    </td>
-  </tr>
-</table>`.trim();
+  return emailSignatureHtml();
 }
 
 export function buildClientContactEmail(fullName: string): {
@@ -48,12 +33,7 @@ export function buildClientContactEmail(fullName: string): {
     '',
     'Nous avons bien reçu votre demande.',
     'Un conseiller 63 Agency vous recontactera très bientôt.',
-    '',
-    '—',
-    'Saad CHAHOUBI | Fondateur',
-    'Contact@63agency.ma',
-    '+212 6 06 67 67 10',
-    'www.63agency.com',
+    emailSignatureText().trimStart(),
   ].join('\n');
 
   const html = `
@@ -62,7 +42,7 @@ export function buildClientContactEmail(fullName: string): {
   <p>Nous avons bien reçu votre demande.</p>
   <p>Un conseiller 63 Agency vous recontactera très bientôt pour en discuter avec vous.</p>
   <p>À très bientôt,</p>
-  ${contactEmailSignatureHtml()}
+  ${emailSignatureHtml()}
 </div>`.trim();
 
   return { subject, text, html };
@@ -102,7 +82,8 @@ export function buildAdminContactEmail(details: {
   ].filter(([, v]) => Boolean(String(v).trim())) as Array<[string, string]>;
 
   const subject = `[63 Agency] Nouveau contact — ${details.name}`;
-  const text = rows.map(([k, v]) => `${k}: ${v}`).join('\n');
+  const text =
+    rows.map(([k, v]) => `${k}: ${v}`).join('\n') + emailSignatureText();
   const htmlRows = rows
     .map(
       ([k, v]) =>
@@ -116,7 +97,7 @@ export function buildAdminContactEmail(details: {
   <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
     ${htmlRows}
   </table>
-  ${contactEmailSignatureHtml()}
+  ${emailSignatureHtml()}
 </div>`.trim();
 
   return { subject, text, html };
