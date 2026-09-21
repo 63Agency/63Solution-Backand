@@ -21,6 +21,7 @@ import { WhatsappModule } from './whatsapp/whatsapp.module';
 import { WhatsappAdminAccessInterceptor } from './common/interceptors/whatsapp-admin-access.interceptor';
 import { LeadsModule } from './leads/leads.module';
 import { RealtimeModule } from './realtime/realtime.module';
+import { PublicModule } from './public/public.module';
 
 @Module({
   imports: [
@@ -45,6 +46,7 @@ import { RealtimeModule } from './realtime/realtime.module';
     NotificationsModule,
     WhatsappModule,
     LeadsModule,
+    PublicModule,
   ],
   controllers: [AppController],
   providers: [

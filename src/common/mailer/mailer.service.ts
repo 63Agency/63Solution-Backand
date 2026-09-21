@@ -55,8 +55,13 @@ export class MailerService {
   private fromAddress(): string {
     const from = this.config.get<string>('SMTP_FROM');
     if (from && from.trim()) return from.trim();
-    const fallbackUser = this.config.get<string>('SMTP_USER');
-    if (fallbackUser && fallbackUser.trim()) return fallbackUser.trim();
+    const fallbackUser = this.config.get<string>('SMTP_USER')?.trim();
+    const fromName = this.config.get<string>('FROM_NAME')?.trim();
+    if (fallbackUser && fromName) {
+      const safeName = fromName.replace(/["\\]/g, '');
+      return `"${safeName}" <${fallbackUser}>`;
+    }
+    if (fallbackUser) return fallbackUser;
     throw new InternalServerErrorException({
       message: 'Configuration SMTP_FROM manquante.',
     });
