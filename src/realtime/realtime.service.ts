@@ -1,6 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type { Server } from 'socket.io';
 import type { ClickUpLead } from '../clickup/types/clickup.types';
+import type {
+  WhatsappConversation,
+  WhatsappMessage,
+} from '../whatsapp/types/whatsapp.types';
 import { REALTIME_EVENTS, REALTIME_ROOMS, type RealtimeRoom } from './realtime.constants';
 
 @Injectable()
@@ -46,5 +50,37 @@ export class RealtimeService {
     clickupTaskId: string | null;
   }): void {
     this.emitToRoom(REALTIME_ROOMS.LEADS, REALTIME_EVENTS.LEAD_DELETED, payload);
+  }
+
+  /** Nouveau message WhatsApp (inbound webhook ou outbound API). */
+  emitWhatsappMessageCreated(message: WhatsappMessage): void {
+    this.emitToRoom(
+      REALTIME_ROOMS.WHATSAPP,
+      REALTIME_EVENTS.MESSAGE_CREATED,
+      message,
+    );
+  }
+
+  /** Statut Meta sent/delivered/read/failed. */
+  emitWhatsappMessageStatus(payload: {
+    id: string;
+    watiMessageId: string | null;
+    conversationId: string;
+    status: string;
+  }): void {
+    this.emitToRoom(
+      REALTIME_ROOMS.WHATSAPP,
+      REALTIME_EVENTS.MESSAGE_STATUS,
+      payload,
+    );
+  }
+
+  /** Conversation mise à jour (dernier message, unread, etc.). */
+  emitWhatsappConversationUpdated(conversation: WhatsappConversation): void {
+    this.emitToRoom(
+      REALTIME_ROOMS.WHATSAPP,
+      REALTIME_EVENTS.CONVERSATION_UPDATED,
+      conversation,
+    );
   }
 }

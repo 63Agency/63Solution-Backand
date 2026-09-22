@@ -13,5 +13,8 @@ export const REALTIME_EVENTS = {
   LEAD_CREATED: 'lead:created',
   LEAD_UPDATED: 'lead:updated',
   LEAD_DELETED: 'lead:deleted',
+  MESSAGE_CREATED: 'message:created',
+  MESSAGE_STATUS: 'message:status',
+  CONVERSATION_UPDATED: 'conversation:updated',
   PONG: 'pong',
 } as const;

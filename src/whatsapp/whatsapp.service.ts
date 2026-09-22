@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { CloudinaryService } from '../cloudinary/cloudinary.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { RealtimeService } from '../realtime/realtime.service';
 import { SupabaseService } from '../supabase/supabase.service';
 import { SendWhatsappMessageDto } from './dto/send-whatsapp-message.dto';
 import { BroadcastWhatsappMessageDto } from './dto/broadcast-whatsapp-message.dto';
@@ -352,8 +353,38 @@ export class WhatsappService {
     private readonly meta: MetaService,
     private readonly notifications: NotificationsService,
     private readonly cloudinary: CloudinaryService,
+    private readonly realtime: RealtimeService,
   ) {}
 
+  /** Emit socket — never throw (HTTP / webhook stay primary). */
+  private emitRealtimeSafe(label: string, fn: () => void): void {
+    try {
+      fn();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`[Realtime] ${label} failed: ${message}`);
+    }
+  }
+
+  private async emitOutboundMessageSafe(
+    message: WhatsappMessage,
+    conversationId: string,
+  ): Promise<void> {
+    this.emitRealtimeSafe('message:created outbound', () => {
+      this.realtime.emitWhatsappMessageCreated(message);
+    });
+    try {
+      const row = await this.conversationByIdOr404(conversationId);
+      this.emitRealtimeSafe('conversation:updated outbound', () => {
+        this.realtime.emitWhatsappConversationUpdated(mapConversation(row));
+      });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn(
+        `[Realtime] conversation:updated outbound load failed: ${message}`,
+      );
+    }
+  }
   verifyMetaWebhook(
     mode: string | undefined,
     token: string | undefined,
@@ -502,6 +533,7 @@ export class WhatsappService {
         watiConversationId: conv.wati_conversation_id,
       });
 
+      await this.emitOutboundMessageSafe(message, conv.id);
       return message;
     }
 
@@ -542,6 +574,7 @@ export class WhatsappService {
       watiConversationId: conv.wati_conversation_id,
     });
 
+    await this.emitOutboundMessageSafe(message, conv.id);
     return message;
   }
 
@@ -722,6 +755,8 @@ export class WhatsappService {
           incrementUnread: false,
         });
 
+        await this.emitOutboundMessageSafe(message, conv.id);
+
         results.push({
           phoneNumber,
           success: true,
@@ -799,6 +834,7 @@ export class WhatsappService {
       `[template] conversationId=${conv.id} template=${templateName}/${templateLanguage} messageId=${message.id}`,
     );
 
+    await this.emitOutboundMessageSafe(message, conv.id);
     return message;
   }
 
@@ -825,7 +861,11 @@ export class WhatsappService {
       });
     }
     await this.notifications.markReadByConversationId(conv.id);
-    return mapConversation(data as ConversationRow);
+    const mapped = mapConversation(data as ConversationRow);
+    this.emitRealtimeSafe('conversation:updated markRead', () => {
+      this.realtime.emitWhatsappConversationUpdated(mapped);
+    });
+    return mapped;
   }
 
   /** Traitement webhook Meta Cloud API (async, erreurs loguées). */
@@ -1143,7 +1183,7 @@ export class WhatsappService {
         }
       }
 
-      const { created } = await this.persistMessage({
+      const { created, message } = await this.persistMessage({
         conversationId: conv.id,
         direction: 'inbound',
         body: text,
@@ -1186,11 +1226,20 @@ export class WhatsappService {
           createdAt: sentAt,
         });
       } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : String(err);
+        const notifErr = err instanceof Error ? err.message : String(err);
         this.logger.warn(
-          `${prefix} notification create failed conversationId=${conv.id}: ${message}`,
+          `${prefix} notification create failed conversationId=${conv.id}: ${notifErr}`,
         );
       }
+
+      this.emitRealtimeSafe('message:created inbound', () => {
+        this.realtime.emitWhatsappMessageCreated(message);
+      });
+      this.emitRealtimeSafe('conversation:updated inbound', () => {
+        this.realtime.emitWhatsappConversationUpdated(
+          mapConversation(updatedConv),
+        );
+      });
     }
   }
 
@@ -1204,7 +1253,7 @@ export class WhatsappService {
       .from('whatsapp_messages')
       .update({ status })
       .eq('wati_message_id', watiMessageId)
-      .select('id');
+      .select('id, conversation_id, status, wati_message_id');
 
     if (error) {
       this.logger.error(
@@ -1216,6 +1265,25 @@ export class WhatsappService {
     this.logger.log(
       `[Meta status] updated metaId=${watiMessageId} status=${status} rows=${count}`,
     );
+
+    if (count > 0 && data[0]) {
+      const row = data[0] as {
+        id: string;
+        conversation_id: string;
+        status: string;
+        wati_message_id: string | null;
+      };
+      this.emitRealtimeSafe('message:status', () => {
+        this.realtime.emitWhatsappMessageStatus({
+          id: String(row.id),
+          watiMessageId: row.wati_message_id
+            ? String(row.wati_message_id)
+            : null,
+          conversationId: String(row.conversation_id),
+          status: String(row.status ?? status),
+        });
+      });
+    }
   }
 
   private async conversationByIdOr404(id: string): Promise<ConversationRow> {
