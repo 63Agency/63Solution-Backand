@@ -39,4 +39,12 @@ export class RealtimeService {
   emitLeadUpdated(lead: ClickUpLead): void {
     this.emitToRoom(REALTIME_ROOMS.LEADS, REALTIME_EVENTS.LEAD_UPDATED, lead);
   }
+
+  /** Lead hard-delete (webhook taskDeleted). */
+  emitLeadDeleted(payload: {
+    id: string;
+    clickupTaskId: string | null;
+  }): void {
+    this.emitToRoom(REALTIME_ROOMS.LEADS, REALTIME_EVENTS.LEAD_DELETED, payload);
+  }
 }

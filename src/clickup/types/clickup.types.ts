@@ -21,7 +21,11 @@ export type ClickUpLead = {
   clickupData: Record<string, unknown>;
 };
 
-export type ClickUpWebhookEvent = 'taskCreated' | 'taskUpdated' | string;
+export type ClickUpWebhookEvent =
+  | 'taskCreated'
+  | 'taskUpdated'
+  | 'taskDeleted'
+  | string;
 
 export type ClickUpWebhookPayload = {
   webhook_id?: string;

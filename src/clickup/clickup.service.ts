@@ -379,8 +379,16 @@ export class ClickupService {
     return lead;
   }
 
-  async handleWebhookEvent(payload: Record<string, unknown>): Promise<ClickUpLead | null> {
+  async handleWebhookEvent(
+    payload: Record<string, unknown>,
+  ): Promise<ClickUpLead | { id: string } | null> {
     const event = String(payload.event ?? '').trim();
+
+    // taskDeleted : pas de fetch API (tâche déjà partie) — hard delete local.
+    if (event === 'taskDeleted') {
+      return this.handleTaskDeleted(payload);
+    }
+
     if (event !== 'taskCreated' && event !== 'taskUpdated') {
       this.logger.log(`ClickUp webhook ignored event=${event || 'unknown'}`);
       return null;
@@ -388,6 +396,70 @@ export class ClickupService {
 
     const task = await this.resolveTaskFromWebhook(payload);
     return this.saveOrUpdateLead(task, payload);
+  }
+
+  /**
+   * Hard delete clickup_leads by ClickUp task_id + emit lead:deleted.
+   * No resolveTaskFromWebhook / GET /task (would 404).
+   */
+  private async handleTaskDeleted(
+    payload: Record<string, unknown>,
+  ): Promise<{ id: string } | null> {
+    const taskId =
+      typeof payload.task_id === 'string' ? payload.task_id.trim() : '';
+    if (!taskId) {
+      this.logger.warn('[ClickUp] taskDeleted without task_id — ignored');
+      return null;
+    }
+
+    const sb = this.supabase.getClient();
+    const { data, error } = await sb
+      .from('clickup_leads')
+      .select('id, clickup_task_id')
+      .eq('clickup_task_id', taskId)
+      .maybeSingle();
+
+    if (error) {
+      throw new ConflictException({ message: error.message });
+    }
+
+    if (!data?.id) {
+      this.logger.log(
+        `[ClickUp] taskDeleted: no local lead clickup_task_id=${taskId}`,
+      );
+      return null;
+    }
+
+    const id = String(data.id);
+    const clickupTaskId = data.clickup_task_id
+      ? String(data.clickup_task_id)
+      : taskId;
+
+    const { error: deleteError } = await sb
+      .from('clickup_leads')
+      .delete()
+      .eq('clickup_task_id', taskId);
+
+    if (deleteError) {
+      throw new ConflictException({
+        message: deleteError.message ?? 'Suppression lead impossible',
+      });
+    }
+
+    this.logger.log(
+      `[ClickUp] lead deleted id=${id} clickup_task_id=${clickupTaskId}`,
+    );
+
+    try {
+      this.realtime.emitLeadDeleted({ id, clickupTaskId });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn(
+        `Realtime emitLeadDeleted failed for lead ${id}: ${message}`,
+      );
+    }
+
+    return { id };
   }
 
   async listLeads(

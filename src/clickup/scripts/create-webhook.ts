@@ -10,6 +10,8 @@
  * Optional:
  *   CLICKUP_TEAM_ID=12345678          (skip auto-detect from GET /team)
  *   CLICKUP_WEBHOOK_ENDPOINT=https://api.63agency.com/clickup/webhook
+ *
+ * Events subscribed: taskCreated, taskUpdated, taskDeleted
  */
 import { config } from 'dotenv';
 import { resolve } from 'node:path';
@@ -111,7 +113,7 @@ async function main(): Promise<void> {
     process.env.CLICKUP_WEBHOOK_ENDPOINT?.trim() ??
     'https://api.63agency.com/clickup/webhook';
 
-  const events = ['taskCreated', 'taskUpdated'];
+  const events = ['taskCreated', 'taskUpdated', 'taskDeleted'];
 
   const team = await resolveTeamId(token);
   console.log(`Team: ${team.name} (id=${team.id})`);

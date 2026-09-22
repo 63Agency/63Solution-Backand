@@ -12,5 +12,6 @@ export type RealtimeRoom =
 export const REALTIME_EVENTS = {
   LEAD_CREATED: 'lead:created',
   LEAD_UPDATED: 'lead:updated',
+  LEAD_DELETED: 'lead:deleted',
   PONG: 'pong',
 } as const;
