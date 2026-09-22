@@ -5,6 +5,7 @@ import {
   IsDateString,
   IsEmail,
   IsIn,
+  IsInt,
   IsOptional,
   IsString,
   IsUUID,
@@ -12,7 +13,13 @@ import {
   MinLength,
   ValidateNested,
 } from 'class-validator';
-import { MEETING_STATUSES, MEETING_STATUS_LABEL, MEETING_TITLES, MEETING_TITLE_LABEL } from '../types/meeting.types';
+import {
+  MEETING_DURATIONS,
+  MEETING_STATUSES,
+  MEETING_STATUS_LABEL,
+  MEETING_TITLES,
+  MEETING_TITLE_LABEL,
+} from '../types/meeting.types';
 import { MeetingMemberDto } from './meeting-member.dto';
 import { MeetingRemindersDto } from './meeting-reminders.dto';
 
@@ -40,6 +47,15 @@ export class UpdateMeetingDto {
   @IsOptional()
   @IsDateString({}, { message: 'meetingDate invalide (ISO 8601)' })
   meetingDate?: string;
+
+  /** Durée en minutes. Valeurs : 15 | 30 | 45 | 60 | 90 | 120. */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt({ message: 'durationMinutes doit être un entier' })
+  @IsIn([...MEETING_DURATIONS], {
+    message: `durationMinutes doit être : ${MEETING_DURATIONS.join(' | ')}`,
+  })
+  durationMinutes?: number;
 
   @IsOptional()
   @IsString({ message: 'contactName invalide' })

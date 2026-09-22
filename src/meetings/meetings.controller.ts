@@ -8,6 +8,7 @@ import {
   Param,
   Patch,
   Post,
+  Put,
   Query,
   Req,
   UseGuards,
@@ -16,10 +17,15 @@ import { AuthGuard } from '@nestjs/passport';
 import type { AppUser } from '../auth/types/app-user';
 import { assertCanAccessMeetings } from '../common/utils/access';
 import { CreateMeetingDto } from './dto/create-meeting.dto';
+import {
+  ListAvailabilitiesQueryDto,
+  UpsertAvailabilityDto,
+} from './dto/availability.dto';
 import { CreateBlockedDayDto, ListBlockedDaysQueryDto } from './dto/blocked-day.dto';
 import { ListMeetingsQueryDto } from './dto/list-meetings-query.dto';
 import { SendReminderDto } from './dto/send-reminder.dto';
 import { UpdateMeetingDto } from './dto/update-meeting.dto';
+import { MeetingsAvailabilitiesService } from './meetings-availabilities.service';
 import { MeetingsBlockedDaysService } from './meetings-blocked-days.service';
 import { MeetingsReminderService } from './meetings-reminder.service';
 import { MeetingsService } from './meetings.service';
@@ -31,6 +37,7 @@ export class MeetingsController {
     private readonly meetings: MeetingsService,
     private readonly reminders: MeetingsReminderService,
     private readonly blockedDays: MeetingsBlockedDaysService,
+    private readonly availabilities: MeetingsAvailabilitiesService,
   ) {}
 
   @Get()
@@ -86,6 +93,44 @@ export class MeetingsController {
     @Req() req: { user: AppUser },
   ) {
     await this.blockedDays.remove(id, req.user);
+  }
+
+  /** Mes disponibilités (admin only). */
+  @Get('availabilities')
+  listMyAvailabilities(
+    @Query() query: ListAvailabilitiesQueryDto,
+    @Req() req: { user: AppUser },
+  ) {
+    return this.availabilities.listMine(query, req.user);
+  }
+
+  /** Disponibilités d’un admin (picker ; admin only). */
+  @Get('availabilities/:userId')
+  listAdminAvailabilities(
+    @Param('userId') userId: string,
+    @Query() query: ListAvailabilitiesQueryDto,
+    @Req() req: { user: AppUser },
+  ) {
+    return this.availabilities.listForAdmin(userId, query, req.user);
+  }
+
+  /** Upsert mes dispos pour un jour (admin only). */
+  @Put('availabilities')
+  upsertMyAvailability(
+    @Body() dto: UpsertAvailabilityDto,
+    @Req() req: { user: AppUser },
+  ) {
+    return this.availabilities.upsertMine(dto, req.user);
+  }
+
+  /** Supprimer mes dispos pour un jour (admin only). */
+  @Delete('availabilities/:date')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async removeMyAvailability(
+    @Param('date') date: string,
+    @Req() req: { user: AppUser },
+  ) {
+    await this.availabilities.removeMine(date, req.user);
   }
 
   @Post()

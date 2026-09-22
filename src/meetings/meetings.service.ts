@@ -26,6 +26,7 @@ import type { ListMeetingsQueryDto } from './dto/list-meetings-query.dto';
 import type { MeetingMemberDto } from './dto/meeting-member.dto';
 import type { UpdateMeetingDto } from './dto/update-meeting.dto';
 import { GoogleMeetService } from './google-meet.service';
+import { MeetingsAvailabilitiesService } from './meetings-availabilities.service';
 import { MeetingsBlockedDaysService } from './meetings-blocked-days.service';
 import { MeetingsReminderService } from './meetings-reminder.service';
 import type {
@@ -39,7 +40,12 @@ import type {
   MeetingRow,
   MeetingStatus,
 } from './types/meeting.types';
-import { keepsReminderJobs, isPhoneCallMeetingTitle } from './types/meeting.types';
+import {
+  DEFAULT_MEETING_DURATION,
+  keepsReminderJobs,
+  isPhoneCallMeetingTitle,
+  normalizeMeetingDuration,
+} from './types/meeting.types';
 import {
   casablancaDayBounds,
   casablancaWeekBounds,
@@ -93,6 +99,7 @@ function mapMeetingBase(
     leadId: r.lead_id ? String(r.lead_id) : null,
     title: String(r.title ?? ''),
     meetingDate: String(r.meeting_date ?? ''),
+    durationMinutes: normalizeMeetingDuration(r.duration_minutes),
     contactName: String(r.contact_name ?? ''),
     contactPhone: r.contact_phone ? String(r.contact_phone) : null,
     contactEmail: r.contact_email ? String(r.contact_email) : null,
@@ -121,7 +128,7 @@ function mapMeetingBase(
 }
 
 const SELECT_COLS =
-  'id, lead_id, title, meeting_date, contact_name, contact_phone, contact_email, status, reminder_whatsapp_sent, reminder_email_sent, reminders, manual_reminder_sent_at, manual_reminder_whatsapp_sent, manual_reminder_email_sent, notes, meet_link, meet_space, created_by, created_at, updated_at';
+  'id, lead_id, title, meeting_date, duration_minutes, contact_name, contact_phone, contact_email, status, reminder_whatsapp_sent, reminder_email_sent, reminders, manual_reminder_sent_at, manual_reminder_whatsapp_sent, manual_reminder_email_sent, notes, meet_link, meet_space, created_by, created_at, updated_at';
 
 @Injectable()
 export class MeetingsService {
@@ -133,6 +140,7 @@ export class MeetingsService {
     @Inject(forwardRef(() => MeetingsReminderService))
     private readonly reminderJobs: MeetingsReminderService,
     private readonly blockedDays: MeetingsBlockedDaysService,
+    private readonly availabilities: MeetingsAvailabilitiesService,
   ) {}
 
   private async enrich(row: MeetingRow): Promise<Meeting> {
@@ -745,12 +753,21 @@ export class MeetingsService {
     );
     await this.assertUsersExist(assignedUserIds);
 
+    const durationMinutes = normalizeMeetingDuration(
+      dto.durationMinutes ?? DEFAULT_MEETING_DURATION,
+    );
+
     // Appel téléphonique → pas de Google Meet.
     const meet = isPhoneCallMeetingTitle(title)
       ? null
       : await this.googleMeet.createSpace();
     const meetingDateIso = new Date(meetingDate).toISOString();
     await this.blockedDays.assertMeetingDateNotBlocked(meetingDateIso);
+    await this.availabilities.assertAssigneesAvailable(
+      meetingDateIso,
+      durationMinutes,
+      assignedUserIds,
+    );
 
     const now = new Date().toISOString();
     const sb = this.supabase.getClient();
@@ -760,6 +777,7 @@ export class MeetingsService {
         lead_id: leadId,
         title,
         meeting_date: meetingDateIso,
+        duration_minutes: durationMinutes,
         contact_name: contactName,
         contact_phone: contactPhone,
         contact_email: contactEmail,
@@ -1017,6 +1035,10 @@ export class MeetingsService {
       }
     }
 
+    if (dto.durationMinutes !== undefined) {
+      patch.duration_minutes = normalizeMeetingDuration(dto.durationMinutes);
+    }
+
     if (dto.contactName !== undefined) {
       const contactName = clean(dto.contactName);
       if (!contactName) {
@@ -1083,6 +1105,32 @@ export class MeetingsService {
         user,
       );
       await this.assertUsersExist(assigneesToSave);
+    }
+
+    const availabilityChanged =
+      dto.meetingDate !== undefined ||
+      dto.durationMinutes !== undefined ||
+      dto.assignedUserIds !== undefined;
+    if (availabilityChanged) {
+      const nextMeetingDateIso =
+        patch.meeting_date !== undefined
+          ? String(patch.meeting_date)
+          : existing.meeting_date;
+      const nextDuration = normalizeMeetingDuration(
+        patch.duration_minutes !== undefined
+          ? (patch.duration_minutes as number)
+          : existing.duration_minutes,
+      );
+      let nextAssigneeIds = assigneesToSave;
+      if (nextAssigneeIds === undefined) {
+        const current = await this.loadAssigneesForMeeting(id);
+        nextAssigneeIds = current.assignedUserIds;
+      }
+      await this.availabilities.assertAssigneesAvailable(
+        nextMeetingDateIso,
+        nextDuration,
+        nextAssigneeIds,
+      );
     }
 
     const nextPhone =

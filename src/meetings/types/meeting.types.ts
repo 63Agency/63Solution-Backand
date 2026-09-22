@@ -27,6 +27,11 @@ export type MeetingTitle = (typeof MEETING_TITLES)[number];
 export const DEFAULT_MEETING_TITLE: MeetingTitle =
   'Audit Performance Marketing';
 
+/** Durées autorisées (minutes). Backfill existants = 30. */
+export const MEETING_DURATIONS = [15, 30, 45, 60, 90, 120] as const;
+export type MeetingDuration = (typeof MEETING_DURATIONS)[number];
+export const DEFAULT_MEETING_DURATION: MeetingDuration = 30;
+
 /** Titre RDV téléphone — pas de Google Meet. */
 export const PHONE_CALL_MEETING_TITLE: MeetingTitle = 'Appel téléphonique';
 
@@ -134,6 +139,7 @@ export type MeetingRow = {
   lead_id: string | null;
   title: string;
   meeting_date: string;
+  duration_minutes?: number | null;
   contact_name: string;
   contact_phone: string | null;
   contact_email: string | null;
@@ -169,6 +175,8 @@ export type Meeting = {
   leadId: string | null;
   title: string;
   meetingDate: string;
+  /** Durée en minutes : 15 | 30 | 45 | 60 | 90 | 120. */
+  durationMinutes: MeetingDuration;
   contactName: string;
   contactPhone: string | null;
   contactEmail: string | null;
@@ -200,3 +208,15 @@ export type Meeting = {
     emailError?: string | null;
   };
 };
+
+export function normalizeMeetingDuration(
+  value: number | null | undefined,
+): MeetingDuration {
+  if (
+    typeof value === 'number' &&
+    (MEETING_DURATIONS as readonly number[]).includes(value)
+  ) {
+    return value as MeetingDuration;
+  }
+  return DEFAULT_MEETING_DURATION;
+}
