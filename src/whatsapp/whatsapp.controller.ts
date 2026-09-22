@@ -70,13 +70,25 @@ export class WhatsappController {
     return this.whatsapp.getConversation(id);
   }
 
+  /**
+   * Messages d'une conversation.
+   * - défaut : oldest-first + nextCursor (comportement historique)
+   * - direction=latest : N derniers (items ASC) + olderCursor pour scroll-up
+   * - before / olderCursor : page plus ancienne (scroll-up)
+   */
   @Get('conversations/:id/messages')
   listMessages(
     @Param('id', ParseUUIDPipe) id: string,
-    @Query('limit', new DefaultValuePipe(200), ParseIntPipe) limit: number,
+    @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit: number,
     @Query('cursor') cursor?: string,
+    @Query('direction') direction?: string,
+    @Query('before') before?: string,
+    @Query('olderCursor') olderCursor?: string,
   ) {
-    return this.whatsapp.listMessages(id, limit, cursor);
+    return this.whatsapp.listMessages(id, limit, cursor, {
+      direction,
+      before: before ?? olderCursor,
+    });
   }
 
   @Post('conversations/:id/messages')

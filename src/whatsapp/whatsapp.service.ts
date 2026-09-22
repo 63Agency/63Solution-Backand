@@ -430,19 +430,36 @@ export class WhatsappService {
 
   async listMessages(
     conversationId: string,
-    limit = 200,
+    limit = 50,
     cursor?: string,
-  ): Promise<{ items: WhatsappMessage[]; nextCursor: string | null }> {
+    opts?: { direction?: string; before?: string },
+  ): Promise<{
+    items: WhatsappMessage[];
+    nextCursor: string | null;
+    olderCursor: string | null;
+    hasMore: boolean;
+  }> {
     await this.conversationByIdOr404(conversationId);
     const take = Math.min(Math.max(limit, 1), 500);
+    const direction = (opts?.direction ?? '').trim().toLowerCase();
+    const beforeDecoded = decodeCursor(opts?.before);
+
+    // Chat: derniers messages, ou page plus ancienne (scroll up).
+    if (direction === 'latest' || beforeDecoded) {
+      return this.listMessagesLatestOrOlder(
+        conversationId,
+        take,
+        beforeDecoded,
+      );
+    }
+
+    // Legacy: oldest-first + nextCursor (depuis le début / après cursor).
     const decoded = decodeCursor(cursor);
 
     let query = this.supabase
       .getClient()
       .from('whatsapp_messages')
-      .select(
-        MESSAGE_SELECT,
-      )
+      .select(MESSAGE_SELECT)
       .eq('conversation_id', conversationId)
       .order('created_at', { ascending: true })
       .order('id', { ascending: true })
@@ -467,7 +484,64 @@ export class WhatsappService {
         ? encodeCursor(String(last.created_at), String(last.id))
         : null;
 
-    return { items, nextCursor };
+    return { items, nextCursor, olderCursor: null, hasMore };
+  }
+
+  /**
+   * N derniers messages (DESC en DB → ASC dans items), ou page plus ancienne
+   * via before/olderCursor (messages strictement plus vieux que le curseur).
+   */
+  private async listMessagesLatestOrOlder(
+    conversationId: string,
+    take: number,
+    before: { createdAt: string; id: string } | null,
+  ): Promise<{
+    items: WhatsappMessage[];
+    nextCursor: string | null;
+    olderCursor: string | null;
+    hasMore: boolean;
+  }> {
+    let query = this.supabase
+      .getClient()
+      .from('whatsapp_messages')
+      .select(MESSAGE_SELECT)
+      .eq('conversation_id', conversationId)
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: false })
+      .limit(take + 1);
+
+    if (before) {
+      // Keyset: (created_at, id) < (before.createdAt, before.id)
+      const ts = before.createdAt.replace(/"/g, '');
+      const id = before.id.replace(/"/g, '');
+      query = query.or(
+        `created_at.lt."${ts}",and(created_at.eq."${ts}",id.lt."${id}")`,
+      );
+    }
+
+    const { data, error } = await query;
+    if (error) {
+      throw new ConflictException({ message: error.message });
+    }
+
+    const rowsDesc = (data ?? []) as MessageRow[];
+    const hasMoreOlder = rowsDesc.length > take;
+    const sliceDesc = hasMoreOlder ? rowsDesc.slice(0, take) : rowsDesc;
+    // Affichage chat : ancien → récent
+    const sliceAsc = [...sliceDesc].reverse();
+    const items = sliceAsc.map(mapMessage);
+    const oldest = sliceAsc[0];
+    const olderCursor =
+      hasMoreOlder && oldest
+        ? encodeCursor(String(oldest.created_at), String(oldest.id))
+        : null;
+
+    return {
+      items,
+      nextCursor: null,
+      olderCursor,
+      hasMore: hasMoreOlder,
+    };
   }
 
   async sendMessage(
