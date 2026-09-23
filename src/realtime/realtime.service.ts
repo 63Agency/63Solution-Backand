@@ -83,4 +83,35 @@ export class RealtimeService {
       conversation,
     );
   }
+
+  /** Progression d’un job broadcast WhatsApp async. */
+  emitBroadcastProgress(payload: {
+    jobId: string;
+    status: string;
+    total: number;
+    sent: number;
+    failed: number;
+  }): void {
+    this.emitToRoom(
+      REALTIME_ROOMS.WHATSAPP,
+      REALTIME_EVENTS.BROADCAST_PROGRESS,
+      payload,
+    );
+  }
+
+  /** Fin d’un job broadcast WhatsApp async. */
+  emitBroadcastDone(payload: {
+    jobId: string;
+    status: string;
+    total: number;
+    sent: number;
+    failed: number;
+    error?: string | null;
+  }): void {
+    this.emitToRoom(
+      REALTIME_ROOMS.WHATSAPP,
+      REALTIME_EVENTS.BROADCAST_DONE,
+      payload,
+    );
+  }
 }

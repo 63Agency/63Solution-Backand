@@ -4,6 +4,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { SupabaseModule } from '../supabase/supabase.module';
 import { MetaService } from './meta.service';
+import { WhatsappBroadcastJobsService } from './whatsapp-broadcast-jobs.service';
 import { WhatsappController } from './whatsapp.controller';
 import { WhatsappPublicController } from './whatsapp-public.controller';
 import { WhatsappWebhookController } from './whatsapp-webhook.controller';
@@ -21,7 +22,7 @@ import { WhatsappService } from './whatsapp.service';
     WhatsappPublicController,
     WhatsappWebhookController,
   ],
-  providers: [WhatsappService, MetaService],
-  exports: [WhatsappService, MetaService],
+  providers: [WhatsappService, MetaService, WhatsappBroadcastJobsService],
+  exports: [WhatsappService, MetaService, WhatsappBroadcastJobsService],
 })
 export class WhatsappModule {}

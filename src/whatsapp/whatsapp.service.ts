@@ -11,7 +11,6 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { SupabaseService } from '../supabase/supabase.service';
 import { SendWhatsappMessageDto } from './dto/send-whatsapp-message.dto';
-import { BroadcastWhatsappMessageDto } from './dto/broadcast-whatsapp-message.dto';
 import { SendWhatsappTemplateDto } from './dto/send-whatsapp-template.dto';
 import type {
   MessageDirection,
@@ -25,15 +24,7 @@ import {
   stringifyForLog,
 } from './utils/whatsapp-debug-log';
 
-export type BroadcastResultItem = {
-  phoneNumber: string;
-  success: boolean;
-  conversationId?: string;
-  messageId?: string;
-  error?: string;
-};
-
-function extractSendErrorMessage(err: unknown): string {
+export function extractSendErrorMessage(err: unknown): string {
   if (err instanceof HttpException) {
     const r = err.getResponse();
     if (typeof r === 'string' && r.trim()) return r.trim();
@@ -753,110 +744,61 @@ export class WhatsappService {
     return { watiMessageId: wamid, preview, authorLabel };
   }
 
-  async broadcastMessage(dto: BroadcastWhatsappMessageDto): Promise<{
-    sent: number;
-    failed: number;
-    results: BroadcastResultItem[];
-  }> {
-    const templateName = dto.templateName?.trim() ?? '';
-    const isTemplate = Boolean(templateName);
-    const text = dto.text?.trim() ?? '';
-    const templateLanguage = dto.templateLanguage?.trim() || 'fr';
-    // Pass through only if present — never invent a default for 0-var templates.
-    const variable1 = dto.variable1?.trim() || undefined;
-    const components = dto.components?.length
-      ? dto.components.map((c) => ({
-          type: c.type,
-          parameters: c.parameters.map((p) => ({
-            type: p.type,
-            text: p.text,
-          })),
-        }))
-      : undefined;
-
-    const results: BroadcastResultItem[] = [];
-    const phones = dto.phoneNumbers.map((p) => String(p).trim()).filter(Boolean);
-
-    for (let i = 0; i < phones.length; i++) {
-      const phoneNumber = phones[i];
-      const phone = normalizePhoneNumber(phoneNumber);
-
-      if (!phone) {
-        results.push({
-          phoneNumber,
-          success: false,
-          error: 'Numéro WhatsApp invalide.',
-        });
-        if (i < phones.length - 1) {
-          await this.delay(300);
-        }
-        continue;
-      }
-
-      try {
-        const sent = isTemplate
-          ? await this.meta.sendTemplateMessage(
-              phone,
-              templateName,
-              templateLanguage,
-              components,
-              variable1,
-            )
-          : await this.meta.sendTextMessage(phone, text);
-        const now = new Date().toISOString();
-        const sentAt = sent.sentAt ?? now;
-
-        const conv = await this.findOrCreateConversation({
-          phone,
-          contactName: null,
-          watiContactId: phone,
-          watiConversationId: null,
-          source: 'meta',
-          lastMessageText: sent.text,
-          lastMessageAt: sentAt,
-          incrementUnread: false,
-        });
-
-        const { message } = await this.persistMessage({
-          conversationId: conv.id,
-          direction: 'outbound',
-          body: sent.text,
-          type: isTemplate ? 'template' : 'text',
-          status: sent.status,
-          watiMessageId: sent.whatsappMessageId,
-          watiLocalId: null,
-          sentAt,
-          incrementUnread: false,
-        });
-
-        await this.emitOutboundMessageSafe(message, conv.id);
-
-        results.push({
-          phoneNumber,
-          success: true,
-          conversationId: conv.id,
-          messageId: message.id,
-        });
-      } catch (err: unknown) {
-        const error = extractSendErrorMessage(err);
-        this.logger.warn(
-          `[broadcast] failed phone=${phoneNumber}: ${error}`,
-        );
-        results.push({ phoneNumber, success: false, error });
-      }
-
-      if (i < phones.length - 1) {
-        await this.delay(300);
-      }
+  /**
+   * Envoi template outbound vers un numéro (broadcast job).
+   * Crée/maj conversation + message + realtime message:created / conversation:updated.
+   */
+  async sendBroadcastTemplateToPhone(input: {
+    phone: string;
+    templateName: string;
+    templateLanguage: string;
+    variable1?: string;
+    components?: Array<{
+      type: string;
+      parameters: Array<{ type: string; text: string }>;
+    }>;
+  }): Promise<{ conversationId: string; messageId: string }> {
+    const phone = normalizePhoneNumber(input.phone);
+    if (!phone) {
+      throw new BadRequestException({ message: 'Numéro WhatsApp invalide.' });
     }
 
-    const sent = results.filter((r) => r.success).length;
-    const failed = results.length - sent;
-    this.logger.log(
-      `[broadcast] complete mode=${isTemplate ? 'template' : 'text'} sent=${sent} failed=${failed} total=${results.length}`,
+    const sent = await this.meta.sendTemplateMessage(
+      phone,
+      input.templateName,
+      input.templateLanguage,
+      input.components,
+      input.variable1,
     );
+    const now = new Date().toISOString();
+    const sentAt = sent.sentAt ?? now;
 
-    return { sent, failed, results };
+    const conv = await this.findOrCreateConversation({
+      phone,
+      contactName: null,
+      watiContactId: phone,
+      watiConversationId: null,
+      source: 'meta',
+      lastMessageText: sent.text,
+      lastMessageAt: sentAt,
+      incrementUnread: false,
+    });
+
+    const { message } = await this.persistMessage({
+      conversationId: conv.id,
+      direction: 'outbound',
+      body: sent.text,
+      type: 'template',
+      status: sent.status,
+      watiMessageId: sent.whatsappMessageId,
+      watiLocalId: null,
+      sentAt,
+      incrementUnread: false,
+    });
+
+    await this.emitOutboundMessageSafe(message, conv.id);
+
+    return { conversationId: conv.id, messageId: message.id };
   }
 
   /**
@@ -910,10 +852,6 @@ export class WhatsappService {
 
     await this.emitOutboundMessageSafe(message, conv.id);
     return message;
-  }
-
-  private delay(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   async markRead(conversationId: string): Promise<WhatsappConversation> {

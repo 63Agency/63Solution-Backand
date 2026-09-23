@@ -33,6 +33,15 @@ export function assertCanAccessMeetings(user: AppUser): void {
   }
 }
 
+/** Même rôles que WhatsApp : admin + admin_whatsapp. */
+export function assertCanAccessWhatsapp(user: AppUser): void {
+  if (!canAccessWhatsapp(user.role)) {
+    throw new ForbiddenException({
+      message: 'Accès WhatsApp non autorisé.',
+    });
+  }
+}
+
 /** Même rôles que WhatsApp broadcast : admin + admin_whatsapp. */
 export function assertCanBroadcastEmail(user: AppUser): void {
   if (!canAccessWhatsapp(user.role)) {
