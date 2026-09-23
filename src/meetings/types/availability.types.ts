@@ -24,8 +24,16 @@ export type AvailabilityDay = {
 };
 
 function normalizeSlots(raw: unknown): AvailabilitySlot[] {
-  if (!Array.isArray(raw)) return [];
-  return raw
+  let value = raw;
+  if (typeof value === 'string') {
+    try {
+      value = JSON.parse(value) as unknown;
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(value)) return [];
+  return value
     .map((item) => {
       if (!item || typeof item !== 'object') return null;
       const start = String((item as { start?: unknown }).start ?? '').trim();

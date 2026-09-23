@@ -554,8 +554,9 @@ class QueryBuilder implements PromiseLike<PgQueryResult> {
     for (const row of rows) {
       const placeholders: string[] = [];
       for (const c of cols) {
-        params.push((row as Record<string, unknown>)[c] ?? null);
-        placeholders.push(`$${params.length}`);
+        placeholders.push(
+          pushWriteParam(params, (row as Record<string, unknown>)[c] ?? null),
+        );
       }
       valueGroups.push(`(${placeholders.join(', ')})`);
     }
@@ -579,8 +580,8 @@ class QueryBuilder implements PromiseLike<PgQueryResult> {
     const sets: string[] = [];
     for (const [k, v] of Object.entries(this.updatePatch)) {
       quoteIdent(k);
-      params.push(v);
-      sets.push(`${quoteIdent(k)} = $${params.length}`);
+      const placeholder = pushWriteParam(params, v);
+      sets.push(`${quoteIdent(k)} = ${placeholder}`);
     }
     const where = this.buildWhere(params);
     const returning = this.returningCols || '*';
@@ -611,8 +612,9 @@ class QueryBuilder implements PromiseLike<PgQueryResult> {
     for (const row of rows) {
       const placeholders: string[] = [];
       for (const c of cols) {
-        params.push((row as Record<string, unknown>)[c] ?? null);
-        placeholders.push(`$${params.length}`);
+        placeholders.push(
+          pushWriteParam(params, (row as Record<string, unknown>)[c] ?? null),
+        );
       }
       valueGroups.push(`(${placeholders.join(', ')})`);
     }
@@ -651,6 +653,36 @@ class QueryBuilder implements PromiseLike<PgQueryResult> {
 function normalizeRows(values: object | object[] | null): object[] {
   if (!values) return [];
   return Array.isArray(values) ? values : [values];
+}
+
+/**
+ * node-pg treats JS arrays as Postgres arrays (`{a,b}`), not JSON.
+ * Objects are JSON.stringified by pg — arrays are not, which breaks jsonb columns
+ * (slots, lignes, pourquoi_choisir, …). Plain objects/arrays destined for jsonb
+ * must be stringified here; filters (e.g. `.in()`) keep raw arrays for `ANY($n)`.
+ */
+function prepareWriteValue(raw: unknown): { value: unknown; asJsonb: boolean } {
+  if (raw === null || raw === undefined) {
+    return { value: null, asJsonb: false };
+  }
+  if (raw instanceof Date) {
+    return { value: raw, asJsonb: false };
+  }
+  if (typeof Buffer !== 'undefined' && Buffer.isBuffer(raw)) {
+    return { value: raw, asJsonb: false };
+  }
+  if (typeof raw === 'object') {
+    return { value: JSON.stringify(raw), asJsonb: true };
+  }
+  return { value: raw, asJsonb: false };
+}
+
+function pushWriteParam(params: unknown[], raw: unknown): string {
+  const prepared = prepareWriteValue(raw);
+  params.push(prepared.value);
+  return prepared.asJsonb
+    ? `$${params.length}::jsonb`
+    : `$${params.length}`;
 }
 
 const OR_OPS = ['neq', 'gte', 'lte', 'gt', 'lt', 'like', 'ilike', 'eq', 'is'] as const;
