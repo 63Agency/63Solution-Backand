@@ -8,10 +8,15 @@ export const BROADCAST_JOB_STATUSES = [
 
 export type BroadcastJobStatus = (typeof BROADCAST_JOB_STATUSES)[number];
 
+export type BroadcastChannels = {
+  whatsapp: boolean;
+  email: boolean;
+};
+
 export type BroadcastMessageConfig = {
-  templateName: string;
+  templateName?: string;
   templateLanguage: string;
-  /** true = phone_numbers is [{phoneNumber, variable1?}] */
+  /** true = recipients objects with per-row variable1/name */
   personalized?: boolean;
   variable1?: string;
   components?: Array<{
@@ -20,10 +25,16 @@ export type BroadcastMessageConfig = {
   }>;
 };
 
-/** Entrée stockée dans phone_numbers jsonb (string legacy ou objet perso). */
+export type BroadcastEmailConfig = {
+  subject: string;
+  html: string;
+};
+
+/** Entrée stockée dans phone_numbers jsonb (rétrocompat string | objet). */
 export type BroadcastRecipientStored = {
-  phoneNumber: string;
-  /** Absent / vide → worker utilise "Client" en mode personalized. */
+  phoneNumber?: string;
+  email?: string;
+  name?: string;
   variable1?: string;
 };
 
@@ -32,11 +43,15 @@ export type BroadcastJobRow = {
   created_by: string | null;
   status: string;
   message_config: BroadcastMessageConfig | unknown;
-  /** string[] (global) OU BroadcastRecipientStored[] (personalized). */
   phone_numbers: unknown;
+  channels?: BroadcastChannels | unknown;
+  email_config?: BroadcastEmailConfig | unknown | null;
   total: number;
+  /** Compteurs WhatsApp (legacy column names). */
   sent: number;
   failed: number;
+  email_sent?: number | null;
+  email_failed?: number | null;
   cursor_index: number;
   error: string | null;
   created_at: string;
@@ -47,11 +62,19 @@ export type BroadcastJobRow = {
 export type BroadcastJobResultRow = {
   id: string;
   job_id: string;
-  phone_number: string;
+  phone_number: string | null;
+  email?: string | null;
+  name?: string | null;
+  recipient_key?: string | null;
   success: boolean;
   conversation_id: string | null;
   message_id: string | null;
   error: string | null;
+  wa_success?: boolean | null;
+  wa_error?: string | null;
+  email_success?: boolean | null;
+  email_error?: string | null;
+  email_message_id?: string | null;
   created_at: string;
 };
 
@@ -59,8 +82,12 @@ export type BroadcastJobListItem = {
   id: string;
   status: BroadcastJobStatus;
   total: number;
-  sent: number;
-  failed: number;
+  /** WA counters (alias sent/failed). */
+  waSent: number;
+  waFailed: number;
+  emailSent: number;
+  emailFailed: number;
+  channels: BroadcastChannels;
   createdBy: string | null;
   createdAt: string;
   finishedAt: string | null;
@@ -70,23 +97,35 @@ export type BroadcastJobDetail = {
   id: string;
   status: BroadcastJobStatus;
   total: number;
-  sent: number;
-  failed: number;
+  waSent: number;
+  waFailed: number;
+  emailSent: number;
+  emailFailed: number;
+  channels: BroadcastChannels;
   createdAt: string;
   startedAt: string | null;
   finishedAt: string | null;
   error: string | null;
   messageConfig: BroadcastMessageConfig;
+  emailConfig: BroadcastEmailConfig | null;
   createdBy: string | null;
 };
 
 export type BroadcastJobResultItem = {
-  phoneNumber: string;
-  success: boolean;
-  error: string | null;
+  phoneNumber: string | null;
+  email: string | null;
+  name: string | null;
+  waSuccess: boolean | null;
+  waError: string | null;
+  emailSuccess: boolean | null;
+  emailError: string | null;
   conversationId: string | null;
   messageId: string | null;
+  emailMessageId: string | null;
   createdAt: string;
+  /** Legacy alias = waSuccess */
+  success: boolean;
+  error: string | null;
 };
 
 function parseJsonField<T>(raw: unknown, fallback: T): T {
@@ -101,14 +140,26 @@ function parseJsonField<T>(raw: unknown, fallback: T): T {
   return raw as T;
 }
 
-export function parsePhoneNumbers(raw: unknown): string[] {
-  return parseBroadcastRecipients(raw).map((r) => r.phoneNumber);
+export function parseChannels(raw: unknown): BroadcastChannels {
+  const cfg = parseJsonField<Record<string, unknown>>(raw, {});
+  const whatsapp = cfg.whatsapp !== false;
+  const email = cfg.email === true;
+  return { whatsapp, email };
+}
+
+export function parseEmailConfig(raw: unknown): BroadcastEmailConfig | null {
+  if (raw == null) return null;
+  const cfg = parseJsonField<Record<string, unknown>>(raw, {});
+  const subject = String(cfg.subject ?? '').trim();
+  const html = String(cfg.html ?? '').trim();
+  if (!subject || !html) return null;
+  return { subject, html };
 }
 
 /**
  * Lit phone_numbers jsonb rétrocompatible :
- * - string[] (jobs globaux / legacy)
- * - [{ phoneNumber, variable1? }] (mode personnalisé)
+ * - string[]
+ * - [{ phoneNumber?, email?, name?, variable1? }]
  */
 export function parseBroadcastRecipients(
   raw: unknown,
@@ -128,12 +179,24 @@ export function parseBroadcastRecipients(
       const phoneNumber = String(
         obj.phoneNumber ?? obj.phone ?? '',
       ).trim();
-      if (!phoneNumber) continue;
-      const v1 =
+      const email = String(obj.email ?? '')
+        .trim()
+        .toLowerCase();
+      const name =
+        typeof obj.name === 'string' && obj.name.trim()
+          ? obj.name.trim()
+          : undefined;
+      const variable1 =
         typeof obj.variable1 === 'string' && obj.variable1.trim()
           ? obj.variable1.trim()
           : undefined;
-      out.push({ phoneNumber, variable1: v1 });
+      if (!phoneNumber && !email) continue;
+      out.push({
+        ...(phoneNumber ? { phoneNumber } : {}),
+        ...(email ? { email } : {}),
+        ...(name ? { name } : {}),
+        ...(variable1 ? { variable1 } : {}),
+      });
     }
   }
   return out;
@@ -142,7 +205,7 @@ export function parseBroadcastRecipients(
 export function parseMessageConfig(raw: unknown): BroadcastMessageConfig {
   const cfg = parseJsonField<Record<string, unknown>>(raw, {});
   return {
-    templateName: String(cfg.templateName ?? '').trim(),
+    templateName: String(cfg.templateName ?? '').trim() || undefined,
     templateLanguage: String(cfg.templateLanguage ?? 'fr').trim() || 'fr',
     personalized: cfg.personalized === true,
     variable1:
@@ -155,13 +218,28 @@ export function parseMessageConfig(raw: unknown): BroadcastMessageConfig {
   };
 }
 
+export function buildRecipientKey(r: {
+  phoneNumber?: string | null;
+  email?: string | null;
+}): string {
+  const phone = (r.phoneNumber ?? '').trim();
+  const email = (r.email ?? '').trim().toLowerCase();
+  if (phone && email) return `${phone}|${email}`;
+  if (phone) return phone;
+  if (email) return `e:${email}`;
+  return 'unknown';
+}
+
 export function mapJobListItem(row: BroadcastJobRow): BroadcastJobListItem {
   return {
     id: String(row.id),
     status: String(row.status) as BroadcastJobStatus,
     total: Number(row.total ?? 0),
-    sent: Number(row.sent ?? 0),
-    failed: Number(row.failed ?? 0),
+    waSent: Number(row.sent ?? 0),
+    waFailed: Number(row.failed ?? 0),
+    emailSent: Number(row.email_sent ?? 0),
+    emailFailed: Number(row.email_failed ?? 0),
+    channels: parseChannels(row.channels),
     createdBy: row.created_by ? String(row.created_by) : null,
     createdAt: String(row.created_at ?? ''),
     finishedAt: row.finished_at ? String(row.finished_at) : null,
@@ -173,24 +251,49 @@ export function mapJobDetail(row: BroadcastJobRow): BroadcastJobDetail {
     id: String(row.id),
     status: String(row.status) as BroadcastJobStatus,
     total: Number(row.total ?? 0),
-    sent: Number(row.sent ?? 0),
-    failed: Number(row.failed ?? 0),
+    waSent: Number(row.sent ?? 0),
+    waFailed: Number(row.failed ?? 0),
+    emailSent: Number(row.email_sent ?? 0),
+    emailFailed: Number(row.email_failed ?? 0),
+    channels: parseChannels(row.channels),
     createdAt: String(row.created_at ?? ''),
     startedAt: row.started_at ? String(row.started_at) : null,
     finishedAt: row.finished_at ? String(row.finished_at) : null,
     error: row.error ? String(row.error) : null,
     messageConfig: parseMessageConfig(row.message_config),
+    emailConfig: parseEmailConfig(row.email_config),
     createdBy: row.created_by ? String(row.created_by) : null,
   };
 }
 
 export function mapJobResult(row: BroadcastJobResultRow): BroadcastJobResultItem {
+  const waSuccess =
+    row.wa_success != null ? Boolean(row.wa_success) : Boolean(row.success);
+  const waError =
+    row.wa_error != null
+      ? String(row.wa_error)
+      : row.error
+        ? String(row.error)
+        : null;
+
   return {
-    phoneNumber: String(row.phone_number ?? ''),
-    success: Boolean(row.success),
-    error: row.error ? String(row.error) : null,
+    phoneNumber: row.phone_number ? String(row.phone_number) : null,
+    email: row.email ? String(row.email) : null,
+    name: row.name ? String(row.name) : null,
+    waSuccess: row.wa_success == null && row.email_success != null && !row.phone_number
+      ? null
+      : waSuccess,
+    waError,
+    emailSuccess:
+      row.email_success == null ? null : Boolean(row.email_success),
+    emailError: row.email_error ? String(row.email_error) : null,
     conversationId: row.conversation_id ? String(row.conversation_id) : null,
     messageId: row.message_id ? String(row.message_id) : null,
+    emailMessageId: row.email_message_id
+      ? String(row.email_message_id)
+      : null,
     createdAt: String(row.created_at ?? ''),
+    success: waSuccess,
+    error: waError,
   };
 }

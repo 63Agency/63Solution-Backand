@@ -84,34 +84,47 @@ export class RealtimeService {
     );
   }
 
-  /** Progression d’un job broadcast WhatsApp async. */
+  /** Progression d’un job broadcast async (WA ± email). */
   emitBroadcastProgress(payload: {
     jobId: string;
     status: string;
     total: number;
-    sent: number;
-    failed: number;
+    /** @deprecated use waSent — rétrocompat front */
+    sent?: number;
+    failed?: number;
+    waSent: number;
+    waFailed: number;
+    emailSent: number;
+    emailFailed: number;
   }): void {
     this.emitToRoom(
       REALTIME_ROOMS.WHATSAPP,
       REALTIME_EVENTS.BROADCAST_PROGRESS,
-      payload,
+      {
+        ...payload,
+        sent: payload.waSent,
+        failed: payload.waFailed,
+      },
     );
   }
 
-  /** Fin d’un job broadcast WhatsApp async. */
+  /** Fin d’un job broadcast async. */
   emitBroadcastDone(payload: {
     jobId: string;
     status: string;
     total: number;
-    sent: number;
-    failed: number;
+    sent?: number;
+    failed?: number;
+    waSent: number;
+    waFailed: number;
+    emailSent: number;
+    emailFailed: number;
     error?: string | null;
   }): void {
-    this.emitToRoom(
-      REALTIME_ROOMS.WHATSAPP,
-      REALTIME_EVENTS.BROADCAST_DONE,
-      payload,
-    );
+    this.emitToRoom(REALTIME_ROOMS.WHATSAPP, REALTIME_EVENTS.BROADCAST_DONE, {
+      ...payload,
+      sent: payload.waSent,
+      failed: payload.waFailed,
+    });
   }
 }

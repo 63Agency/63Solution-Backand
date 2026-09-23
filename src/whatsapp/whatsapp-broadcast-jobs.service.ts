@@ -9,10 +9,13 @@ import {
 import { ConfigService } from '@nestjs/config';
 import type { AppUser } from '../auth/types/app-user';
 import { assertCanAccessWhatsapp } from '../common/utils/access';
+import { EmailService } from '../email/email.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { SupabaseService } from '../supabase/supabase.service';
 import type { CreateBroadcastDto } from './dto/create-broadcast.dto';
 import type {
+  BroadcastChannels,
+  BroadcastEmailConfig,
   BroadcastJobDetail,
   BroadcastJobListItem,
   BroadcastJobResultItem,
@@ -22,10 +25,13 @@ import type {
   BroadcastRecipientStored,
 } from './types/broadcast-job.types';
 import {
+  buildRecipientKey,
   mapJobDetail,
   mapJobListItem,
   mapJobResult,
   parseBroadcastRecipients,
+  parseChannels,
+  parseEmailConfig,
   parseMessageConfig,
 } from './types/broadcast-job.types';
 import { normalizePhoneNumber } from './utils/phone';
@@ -35,33 +41,35 @@ import {
 } from './whatsapp.service';
 
 const JOB_SELECT =
-  'id, created_by, status, message_config, phone_numbers, total, sent, failed, cursor_index, error, created_at, started_at, finished_at';
+  'id, created_by, status, message_config, phone_numbers, channels, email_config, total, sent, failed, email_sent, email_failed, cursor_index, error, created_at, started_at, finished_at';
 
 const RESULT_SELECT =
-  'id, job_id, phone_number, success, conversation_id, message_id, error, created_at';
+  'id, job_id, phone_number, email, name, recipient_key, success, conversation_id, message_id, error, wa_success, wa_error, email_success, email_error, email_message_id, created_at';
 
 const PHONE_WARN_THRESHOLD = 2000;
 const PROGRESS_EVERY_N = 5;
 const PROGRESS_MIN_MS = 1000;
-/** Fallback {{1}} en mode personalized si variable1 absent. */
 const DEFAULT_VARIABLE1 = 'Client';
+
+function isValidEmail(email: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
 
 @Injectable()
 export class WhatsappBroadcastJobsService implements OnModuleInit {
   private readonly logger = new Logger(WhatsappBroadcastJobsService.name);
-  /** Mutex in-process : un seul runner à la fois. */
   private running = false;
 
   constructor(
     private readonly supabase: SupabaseService,
     private readonly whatsapp: WhatsappService,
+    private readonly email: EmailService,
     private readonly realtime: RealtimeService,
     private readonly config: ConfigService,
   ) {}
 
   /**
-   * Boot cleanup : jobs `running` orphelins → failed (pas de resume = évite double Meta).
-   * Les `pending` sont conservés et claimés au kick du worker.
+   * Boot: running orphelins → failed. pending conservés + reclaim.
    */
   async onModuleInit(): Promise<void> {
     try {
@@ -78,7 +86,6 @@ export class WhatsappBroadcastJobsService implements OnModuleInit {
         .select('id');
 
       if (error) {
-        // Table absente tant que sql/041 n’est pas appliqué.
         this.logger.warn(
           `[BroadcastJobs] boot cleanup skipped: ${error.message}`,
         );
@@ -87,11 +94,9 @@ export class WhatsappBroadcastJobsService implements OnModuleInit {
       const n = (data ?? []).length;
       if (n > 0) {
         this.logger.warn(
-          `[BroadcastJobs] boot cleanup: marked ${n} running job(s) as failed (interrupted)`,
+          `[BroadcastJobs] boot cleanup: marked ${n} running job(s) as failed`,
         );
       }
-
-      // Reprendre la file des pending après restart.
       this.kick();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -105,65 +110,86 @@ export class WhatsappBroadcastJobsService implements OnModuleInit {
   ): Promise<{ jobId: string; total: number; status: 'pending' }> {
     assertCanAccessWhatsapp(user);
 
-    const templateName = dto.templateName.trim();
-    if (!templateName) {
-      throw new BadRequestException({ message: 'templateName requis' });
+    const channels: BroadcastChannels = {
+      whatsapp: dto.channels?.whatsapp !== false,
+      email: dto.channels?.email === true,
+    };
+    if (!channels.whatsapp && !channels.email) {
+      throw new BadRequestException({
+        message: 'Au moins un canal (whatsapp ou email) requis.',
+      });
     }
 
-    // Si les deux formes sont fournies → recipients (forme B) gagne.
+    if (channels.whatsapp && !dto.templateName?.trim()) {
+      throw new BadRequestException({ message: 'templateName requis' });
+    }
+    if (channels.email) {
+      if (!dto.emailSubject?.trim() || !dto.emailHtml?.trim()) {
+        throw new BadRequestException({
+          message: 'emailSubject et emailHtml requis quand channels.email=true',
+        });
+      }
+    }
+
     const useRecipients =
       Array.isArray(dto.recipients) && dto.recipients.length > 0;
 
-    let storedPhones: string[] | BroadcastRecipientStored[];
+    let stored: BroadcastRecipientStored[];
     let personalized = false;
-    let total = 0;
 
     if (useRecipients) {
       personalized = true;
-      const recipients = this.normalizeAndDedupeRecipients(dto.recipients!);
-      if (recipients.length === 0) {
-        throw new BadRequestException({
-          message: 'Aucun numéro WhatsApp valide.',
-        });
-      }
-      storedPhones = recipients;
-      total = recipients.length;
+      stored = this.normalizeAndDedupeRecipients(dto.recipients!, channels);
     } else {
       const phones = this.normalizeAndDedupePhones(dto.phoneNumbers ?? []);
-      if (phones.length === 0) {
-        throw new BadRequestException({
-          message: 'Aucun numéro WhatsApp valide.',
-        });
-      }
-      storedPhones = phones;
-      total = phones.length;
+      stored = phones.map((phoneNumber) => ({ phoneNumber }));
     }
 
-    if (total > PHONE_WARN_THRESHOLD) {
+    if (stored.length === 0) {
+      throw new BadRequestException({
+        message:
+          'Aucun destinataire valide pour les canaux sélectionnés (phone et/ou email).',
+      });
+    }
+
+    if (stored.length > PHONE_WARN_THRESHOLD) {
       this.logger.warn(
-        `[BroadcastJobs] large job phones=${total} (threshold=${PHONE_WARN_THRESHOLD}) by=${user.id}`,
+        `[BroadcastJobs] large job total=${stored.length} by=${user.id}`,
       );
     }
 
-    const messageConfig: BroadcastMessageConfig = {
-      templateName,
-      templateLanguage: dto.templateLanguage?.trim() || 'fr',
-      personalized,
-      // Globaux uniquement en forme A (ignorés en mode personalized).
-      variable1: personalized
-        ? undefined
-        : dto.variable1?.trim() || undefined,
-      components:
-        personalized || !dto.components?.length
-          ? undefined
-          : dto.components.map((c) => ({
-              type: c.type,
-              parameters: c.parameters.map((p) => ({
-                type: p.type,
-                text: p.text,
-              })),
-            })),
-    };
+    const messageConfig: BroadcastMessageConfig = channels.whatsapp
+      ? {
+          templateName: dto.templateName!.trim(),
+          templateLanguage: dto.templateLanguage?.trim() || 'fr',
+          personalized,
+          variable1: personalized
+            ? undefined
+            : dto.variable1?.trim() || undefined,
+          components:
+            personalized || !dto.components?.length
+              ? undefined
+              : dto.components.map((c) => ({
+                  type: c.type,
+                  parameters: c.parameters.map((p) => ({
+                    type: p.type,
+                    text: p.text,
+                  })),
+                })),
+        }
+      : { templateLanguage: 'fr', personalized: false };
+
+    const emailConfig: BroadcastEmailConfig | null = channels.email
+      ? {
+          subject: dto.emailSubject!.trim(),
+          html: dto.emailHtml!.trim(),
+        }
+      : null;
+
+    // phone_numbers jsonb : objets enrichis (ou string[] legacy via forme A → objets phone only)
+    const phoneNumbersPayload = personalized
+      ? stored
+      : stored.map((r) => r.phoneNumber!).filter(Boolean);
 
     const now = new Date().toISOString();
     const { data, error } = await this.supabase
@@ -173,10 +199,14 @@ export class WhatsappBroadcastJobsService implements OnModuleInit {
         created_by: user.id,
         status: 'pending',
         message_config: messageConfig,
-        phone_numbers: storedPhones,
-        total,
+        phone_numbers: personalized ? stored : phoneNumbersPayload,
+        channels,
+        email_config: emailConfig,
+        total: stored.length,
         sent: 0,
         failed: 0,
+        email_sent: 0,
+        email_failed: 0,
         cursor_index: 0,
         error: null,
         created_at: now,
@@ -194,16 +224,15 @@ export class WhatsappBroadcastJobsService implements OnModuleInit {
 
     const jobId = String((data as BroadcastJobRow).id);
     this.logger.log(
-      `[BroadcastJobs] created jobId=${jobId} total=${total} personalized=${personalized} by=${user.id}`,
+      `[BroadcastJobs] created jobId=${jobId} total=${stored.length} wa=${channels.whatsapp} email=${channels.email} by=${user.id}`,
     );
     this.kick();
 
-    return { jobId, total, status: 'pending' };
+    return { jobId, total: stored.length, status: 'pending' };
   }
 
   async listJobs(user: AppUser): Promise<{ items: BroadcastJobListItem[] }> {
     assertCanAccessWhatsapp(user);
-
     const { data, error } = await this.supabase
       .getClient()
       .from('whatsapp_broadcast_jobs')
@@ -211,22 +240,15 @@ export class WhatsappBroadcastJobsService implements OnModuleInit {
       .order('created_at', { ascending: false })
       .limit(50);
 
-    if (error) {
-      throw new ConflictException({ message: error.message });
-    }
-
+    if (error) throw new ConflictException({ message: error.message });
     return {
       items: ((data ?? []) as BroadcastJobRow[]).map(mapJobListItem),
     };
   }
 
-  async getJob(
-    jobId: string,
-    user: AppUser,
-  ): Promise<BroadcastJobDetail> {
+  async getJob(jobId: string, user: AppUser): Promise<BroadcastJobDetail> {
     assertCanAccessWhatsapp(user);
-    const row = await this.loadJobOrThrow(jobId);
-    return mapJobDetail(row);
+    return mapJobDetail(await this.loadJobOrThrow(jobId));
   }
 
   async listResults(
@@ -248,10 +270,7 @@ export class WhatsappBroadcastJobsService implements OnModuleInit {
       .order('created_at', { ascending: true })
       .range(offset, offset + limit - 1);
 
-    if (error) {
-      throw new ConflictException({ message: error.message });
-    }
-
+    if (error) throw new ConflictException({ message: error.message });
     return {
       items: ((data ?? []) as BroadcastJobResultRow[]).map(mapJobResult),
       total: count ?? 0,
@@ -286,9 +305,7 @@ export class WhatsappBroadcastJobsService implements OnModuleInit {
       .select(JOB_SELECT)
       .maybeSingle();
 
-    if (error) {
-      throw new ConflictException({ message: error.message });
-    }
+    if (error) throw new ConflictException({ message: error.message });
     if (!data) {
       throw new ConflictException({
         message: 'Impossible d’annuler ce job (status changé).',
@@ -297,16 +314,12 @@ export class WhatsappBroadcastJobsService implements OnModuleInit {
 
     const updated = data as BroadcastJobRow;
     this.logger.log(`[BroadcastJobs] cancel requested jobId=${jobId}`);
-
-    // pending → done immédiat ; running → worker finalise entre numéros.
     if (String(updated.status) === 'cancelled' && updated.finished_at) {
       this.emitDone(updated);
     }
-
     return { ok: true, id: jobId, status: String(updated.status) };
   }
 
-  /** Démarre le worker si idle (FIFO). */
   kick(): void {
     setImmediate(() => {
       void this.processQueue();
@@ -328,9 +341,7 @@ export class WhatsappBroadcastJobsService implements OnModuleInit {
       this.logger.error(`[BroadcastJobs] processQueue fatal: ${message}`);
     } finally {
       this.running = false;
-      // Un createJob peut être arrivé pendant le finally.
-      const pending = await this.hasPending();
-      if (pending) this.kick();
+      if (await this.hasPending()) this.kick();
     }
   }
 
@@ -380,38 +391,46 @@ export class WhatsappBroadcastJobsService implements OnModuleInit {
     const jobId = String(job.id);
     const recipients = parseBroadcastRecipients(job.phone_numbers);
     const config = parseMessageConfig(job.message_config);
+    const channels = parseChannels(job.channels);
+    const emailConfig = parseEmailConfig(job.email_config);
     const personalized = config.personalized === true;
-    let sent = Number(job.sent ?? 0);
-    let failed = Number(job.failed ?? 0);
+
+    let waSent = Number(job.sent ?? 0);
+    let waFailed = Number(job.failed ?? 0);
+    let emailSent = Number(job.email_sent ?? 0);
+    let emailFailed = Number(job.email_failed ?? 0);
     let cursor = Number(job.cursor_index ?? 0);
     const total = Number(job.total ?? recipients.length);
     const delayMs = this.delayMs();
 
     this.logger.log(
-      `[BroadcastJobs] start jobId=${jobId} total=${total} cursor=${cursor} personalized=${personalized} delayMs=${delayMs}`,
+      `[BroadcastJobs] start jobId=${jobId} total=${total} wa=${channels.whatsapp} email=${channels.email}`,
     );
     this.emitProgress({
       jobId,
       status: 'running',
       total,
-      sent,
-      failed,
+      waSent,
+      waFailed,
+      emailSent,
+      emailFailed,
     });
 
     let lastProgressAt = Date.now();
-    let phonesSinceProgress = 0;
+    let sinceProgress = 0;
 
     for (let i = cursor; i < recipients.length; i += 1) {
-      const cancelled = await this.isCancelled(jobId);
-      if (cancelled) {
+      if (await this.isCancelled(jobId)) {
         const now = new Date().toISOString();
         const { data: finished } = await this.supabase
           .getClient()
           .from('whatsapp_broadcast_jobs')
           .update({
             status: 'cancelled',
-            sent,
-            failed,
+            sent: waSent,
+            failed: waFailed,
+            email_sent: emailSent,
+            email_failed: emailFailed,
             cursor_index: i,
             finished_at: now,
           })
@@ -419,15 +438,14 @@ export class WhatsappBroadcastJobsService implements OnModuleInit {
           .select(JOB_SELECT)
           .maybeSingle();
 
-        this.logger.log(
-          `[BroadcastJobs] cancelled jobId=${jobId} sent=${sent} failed=${failed} at=${i}`,
-        );
         this.emitDone(
           (finished as BroadcastJobRow) ?? {
             ...job,
             status: 'cancelled',
-            sent,
-            failed,
+            sent: waSent,
+            failed: waFailed,
+            email_sent: emailSent,
+            email_failed: emailFailed,
             finished_at: now,
           },
         );
@@ -435,77 +453,125 @@ export class WhatsappBroadcastJobsService implements OnModuleInit {
       }
 
       const recipient = recipients[i]!;
-      const phone = normalizePhoneNumber(recipient.phoneNumber);
+      const phone = recipient.phoneNumber
+        ? normalizePhoneNumber(recipient.phoneNumber)
+        : '';
+      const email = (recipient.email ?? '').trim().toLowerCase();
+      const displayName =
+        recipient.name?.trim() ||
+        recipient.variable1?.trim() ||
+        DEFAULT_VARIABLE1;
 
-      if (!phone) {
-        failed += 1;
-        await this.insertResult({
-          jobId,
-          phoneNumber: recipient.phoneNumber,
-          success: false,
-          error: 'Numéro WhatsApp invalide.',
-        });
-      } else {
-        try {
-          const sendArgs = personalized
-            ? {
-                phone,
-                templateName: config.templateName,
-                templateLanguage: config.templateLanguage,
-                // Mode perso : variable1 du destinataire, fallback "Client".
-                variable1: recipient.variable1?.trim() || DEFAULT_VARIABLE1,
-                components: undefined,
-              }
-            : {
-                phone,
-                templateName: config.templateName,
-                templateLanguage: config.templateLanguage,
-                variable1: config.variable1,
-                components: config.components,
-              };
+      let waSuccess: boolean | null = null;
+      let waError: string | null = null;
+      let conversationId: string | null = null;
+      let messageId: string | null = null;
+      let emailSuccess: boolean | null = null;
+      let emailError: string | null = null;
+      let emailMessageId: string | null = null;
 
-          const out =
-            await this.whatsapp.sendBroadcastTemplateToPhone(sendArgs);
-          sent += 1;
-          await this.insertResult({
-            jobId,
-            phoneNumber: phone,
-            success: true,
-            conversationId: out.conversationId,
-            messageId: out.messageId,
-          });
-        } catch (err: unknown) {
-          const error = extractSendErrorMessage(err);
-          failed += 1;
-          this.logger.warn(
-            `[BroadcastJobs] fail jobId=${jobId} phone=${phone}: ${error}`,
-          );
-          await this.insertResult({
-            jobId,
-            phoneNumber: phone,
-            success: false,
-            error,
-          });
+      // ── WhatsApp ──
+      if (channels.whatsapp) {
+        if (!phone) {
+          waSuccess = false;
+          waError = 'Numéro WhatsApp manquant ou invalide.';
+          waFailed += 1;
+        } else {
+          try {
+            const variable1 = personalized
+              ? recipient.variable1?.trim() ||
+                recipient.name?.trim() ||
+                DEFAULT_VARIABLE1
+              : config.variable1;
+            const out = await this.whatsapp.sendBroadcastTemplateToPhone({
+              phone,
+              templateName: config.templateName || '',
+              templateLanguage: config.templateLanguage,
+              variable1: personalized ? variable1 : config.variable1,
+              components: personalized ? undefined : config.components,
+            });
+            waSuccess = true;
+            conversationId = out.conversationId;
+            messageId = out.messageId;
+            waSent += 1;
+          } catch (err: unknown) {
+            waSuccess = false;
+            waError = extractSendErrorMessage(err);
+            waFailed += 1;
+            this.logger.warn(
+              `[BroadcastJobs] WA fail jobId=${jobId} phone=${phone}: ${waError}`,
+            );
+          }
         }
       }
 
-      cursor = i + 1;
-      await this.updateProgress(jobId, { sent, failed, cursor_index: cursor });
+      // ── Email ──
+      if (channels.email && emailConfig) {
+        if (!email || !isValidEmail(email)) {
+          emailSuccess = false;
+          emailError = 'email invalide ou manquant.';
+          emailFailed += 1;
+        } else {
+          try {
+            const out = await this.email.sendOneBroadcastEmail({
+              email,
+              name: displayName,
+              subject: emailConfig.subject,
+              html: emailConfig.html,
+            });
+            emailSuccess = true;
+            emailMessageId = out.messageId || null;
+            emailSent += 1;
+          } catch (err: unknown) {
+            emailSuccess = false;
+            emailError = extractSendErrorMessage(err);
+            emailFailed += 1;
+            this.logger.warn(
+              `[BroadcastJobs] email fail jobId=${jobId} email=${email}: ${emailError}`,
+            );
+          }
+        }
+      }
 
-      phonesSinceProgress += 1;
+      await this.upsertResult({
+        jobId,
+        phoneNumber: phone || null,
+        email: email || null,
+        name: displayName,
+        waSuccess,
+        waError,
+        conversationId,
+        messageId,
+        emailSuccess,
+        emailError,
+        emailMessageId,
+      });
+
+      cursor = i + 1;
+      await this.updateProgress(jobId, {
+        sent: waSent,
+        failed: waFailed,
+        email_sent: emailSent,
+        email_failed: emailFailed,
+        cursor_index: cursor,
+      });
+
+      sinceProgress += 1;
       const nowMs = Date.now();
       if (
-        phonesSinceProgress >= PROGRESS_EVERY_N ||
+        sinceProgress >= PROGRESS_EVERY_N ||
         nowMs - lastProgressAt >= PROGRESS_MIN_MS
       ) {
         this.emitProgress({
           jobId,
           status: 'running',
           total,
-          sent,
-          failed,
+          waSent,
+          waFailed,
+          emailSent,
+          emailFailed,
         });
-        phonesSinceProgress = 0;
+        sinceProgress = 0;
         lastProgressAt = nowMs;
       }
 
@@ -520,8 +586,10 @@ export class WhatsappBroadcastJobsService implements OnModuleInit {
       .from('whatsapp_broadcast_jobs')
       .update({
         status: 'completed',
-        sent,
-        failed,
+        sent: waSent,
+        failed: waFailed,
+        email_sent: emailSent,
+        email_failed: emailFailed,
         cursor_index: cursor,
         finished_at: now,
         error: null,
@@ -537,14 +605,16 @@ export class WhatsappBroadcastJobsService implements OnModuleInit {
     }
 
     this.logger.log(
-      `[BroadcastJobs] completed jobId=${jobId} sent=${sent} failed=${failed} total=${total}`,
+      `[BroadcastJobs] completed jobId=${jobId} wa=${waSent}/${waFailed} email=${emailSent}/${emailFailed}`,
     );
     this.emitDone(
       (doneRow as BroadcastJobRow) ?? {
         ...job,
         status: 'completed',
-        sent,
-        failed,
+        sent: waSent,
+        failed: waFailed,
+        email_sent: emailSent,
+        email_failed: emailFailed,
         finished_at: now,
       },
     );
@@ -557,12 +627,20 @@ export class WhatsappBroadcastJobsService implements OnModuleInit {
       .select('status')
       .eq('id', jobId)
       .maybeSingle();
-    return String((data as { status?: string } | null)?.status ?? '') === 'cancelled';
+    return (
+      String((data as { status?: string } | null)?.status ?? '') === 'cancelled'
+    );
   }
 
   private async updateProgress(
     jobId: string,
-    patch: { sent: number; failed: number; cursor_index: number },
+    patch: {
+      sent: number;
+      failed: number;
+      email_sent: number;
+      email_failed: number;
+      cursor_index: number;
+    },
   ): Promise<void> {
     const { error } = await this.supabase
       .getClient()
@@ -576,32 +654,53 @@ export class WhatsappBroadcastJobsService implements OnModuleInit {
     }
   }
 
-  private async insertResult(input: {
+  private async upsertResult(input: {
     jobId: string;
-    phoneNumber: string;
-    success: boolean;
-    conversationId?: string;
-    messageId?: string;
-    error?: string;
+    phoneNumber: string | null;
+    email: string | null;
+    name: string;
+    waSuccess: boolean | null;
+    waError: string | null;
+    conversationId: string | null;
+    messageId: string | null;
+    emailSuccess: boolean | null;
+    emailError: string | null;
+    emailMessageId: string | null;
   }): Promise<void> {
+    const recipientKey = buildRecipientKey({
+      phoneNumber: input.phoneNumber,
+      email: input.email,
+    });
+    const legacySuccess = input.waSuccess === true;
+    const legacyError = input.waError;
+
     const { error } = await this.supabase
       .getClient()
       .from('whatsapp_broadcast_job_results')
       .upsert(
         {
           job_id: input.jobId,
+          recipient_key: recipientKey,
           phone_number: input.phoneNumber,
-          success: input.success,
-          conversation_id: input.conversationId ?? null,
-          message_id: input.messageId ?? null,
-          error: input.error ?? null,
+          email: input.email,
+          name: input.name,
+          success: legacySuccess,
+          error: legacyError,
+          conversation_id: input.conversationId,
+          message_id: input.messageId,
+          wa_success: input.waSuccess,
+          wa_error: input.waError,
+          email_success: input.emailSuccess,
+          email_error: input.emailError,
+          email_message_id: input.emailMessageId,
           created_at: new Date().toISOString(),
         },
-        { onConflict: 'job_id,phone_number' },
+        { onConflict: 'job_id,recipient_key' },
       );
+
     if (error) {
       this.logger.warn(
-        `[BroadcastJobs] result insert failed jobId=${input.jobId} phone=${input.phoneNumber}: ${error.message}`,
+        `[BroadcastJobs] result upsert failed jobId=${input.jobId} key=${recipientKey}: ${error.message}`,
       );
     }
   }
@@ -610,8 +709,10 @@ export class WhatsappBroadcastJobsService implements OnModuleInit {
     jobId: string;
     status: string;
     total: number;
-    sent: number;
-    failed: number;
+    waSent: number;
+    waFailed: number;
+    emailSent: number;
+    emailFailed: number;
   }): void {
     this.realtime.emitBroadcastProgress(payload);
   }
@@ -621,8 +722,10 @@ export class WhatsappBroadcastJobsService implements OnModuleInit {
       jobId: String(row.id),
       status: String(row.status),
       total: Number(row.total ?? 0),
-      sent: Number(row.sent ?? 0),
-      failed: Number(row.failed ?? 0),
+      waSent: Number(row.sent ?? 0),
+      waFailed: Number(row.failed ?? 0),
+      emailSent: Number(row.email_sent ?? 0),
+      emailFailed: Number(row.email_failed ?? 0),
       error: row.error ? String(row.error) : null,
     });
   }
@@ -639,9 +742,7 @@ export class WhatsappBroadcastJobsService implements OnModuleInit {
       .eq('id', id)
       .maybeSingle();
 
-    if (error) {
-      throw new ConflictException({ message: error.message });
-    }
+    if (error) throw new ConflictException({ message: error.message });
     if (!data) {
       throw new NotFoundException({ message: 'Job introuvable.' });
     }
@@ -660,20 +761,49 @@ export class WhatsappBroadcastJobsService implements OnModuleInit {
     return out;
   }
 
-  /** Déduplique par phone normalisé ; conserve le premier variable1. */
+  /**
+   * Déduplique : clé = phone|email. Garde le premier.
+   * Filtre selon canaux (doit avoir au moins un contact utilisable).
+   */
   private normalizeAndDedupeRecipients(
-    raw: Array<{ phoneNumber: string; variable1?: string }>,
+    raw: Array<{
+      phoneNumber?: string;
+      email?: string;
+      name?: string;
+      variable1?: string;
+    }>,
+    channels: BroadcastChannels,
   ): BroadcastRecipientStored[] {
     const seen = new Set<string>();
     const out: BroadcastRecipientStored[] = [];
+
     for (const item of raw) {
-      const phone = normalizePhoneNumber(String(item.phoneNumber ?? '').trim());
-      if (!phone || seen.has(phone)) continue;
-      seen.add(phone);
-      const v1 = item.variable1?.trim() || undefined;
+      const phone = normalizePhoneNumber(
+        String(item.phoneNumber ?? '').trim(),
+      );
+      const email = String(item.email ?? '')
+        .trim()
+        .toLowerCase();
+      const validEmail = email && isValidEmail(email) ? email : '';
+
+      const usableWa = channels.whatsapp && Boolean(phone);
+      const usableEmail = channels.email && Boolean(validEmail);
+      if (!usableWa && !usableEmail) continue;
+
+      const key = buildRecipientKey({
+        phoneNumber: phone || null,
+        email: validEmail || null,
+      });
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      const name = item.name?.trim() || undefined;
+      const variable1 = item.variable1?.trim() || undefined;
       out.push({
-        phoneNumber: phone,
-        ...(v1 ? { variable1: v1 } : {}),
+        ...(phone ? { phoneNumber: phone } : {}),
+        ...(validEmail ? { email: validEmail } : {}),
+        ...(name ? { name } : {}),
+        ...(variable1 ? { variable1 } : {}),
       });
     }
     return out;

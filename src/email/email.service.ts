@@ -265,6 +265,46 @@ export class EmailService {
   }
 
   /**
+   * Envoi unitaire bulk (réutilisé par le worker broadcast multi-canal).
+   * Remplace {{name}} / {{1}}, ajoute la signature, SMTP BULK_*.
+   */
+  async sendOneBroadcastEmail(input: {
+    email: string;
+    name?: string | null;
+    subject: string;
+    html: string;
+  }): Promise<{ messageId: string }> {
+    const email = clean(input.email).toLowerCase();
+    if (!email || !isValidEmail(email)) {
+      throw new ConflictException({ message: 'email invalide' });
+    }
+    const displayName = clean(input.name) || 'Client';
+    const subjectTpl = clean(input.subject);
+    const htmlTpl = input.html.trim();
+    if (!subjectTpl || !htmlTpl) {
+      throw new ConflictException({
+        message: 'subject et html sont requis.',
+      });
+    }
+
+    const subject = applyNamePlaceholder(subjectTpl, displayName);
+    const html = appendBulkEmailSignature(
+      applyNamePlaceholder(htmlTpl, displayName),
+    );
+    const text =
+      htmlToText(applyNamePlaceholder(htmlTpl, displayName)) +
+      BULK_EMAIL_SIGNATURE_TEXT;
+
+    const mailResult = await this.bulkMailer.sendMail({
+      to: email,
+      subject,
+      html,
+      text,
+    });
+    return { messageId: mailResult.messageId || '' };
+  }
+
+  /**
    * Envoi bulk one-by-one via BulkMailerService (BULK_SMTP_*).
    * Remplace {{name}} (et {{1}}) dans subject + html par destinataire.
    * Auth : admin + admin_whatsapp.

@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { CloudinaryModule } from '../cloudinary/cloudinary.module';
+import { EmailModule } from '../email/email.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { SupabaseModule } from '../supabase/supabase.module';
@@ -16,6 +17,7 @@ import { WhatsappService } from './whatsapp.service';
     NotificationsModule,
     CloudinaryModule,
     RealtimeModule,
+    EmailModule,
   ],
   controllers: [
     WhatsappController,
