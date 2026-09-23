@@ -19,13 +19,14 @@ import type {
   BroadcastJobResultRow,
   BroadcastJobRow,
   BroadcastMessageConfig,
+  BroadcastRecipientStored,
 } from './types/broadcast-job.types';
 import {
   mapJobDetail,
   mapJobListItem,
   mapJobResult,
+  parseBroadcastRecipients,
   parseMessageConfig,
-  parsePhoneNumbers,
 } from './types/broadcast-job.types';
 import { normalizePhoneNumber } from './utils/phone';
 import {
@@ -42,6 +43,8 @@ const RESULT_SELECT =
 const PHONE_WARN_THRESHOLD = 2000;
 const PROGRESS_EVERY_N = 5;
 const PROGRESS_MIN_MS = 1000;
+/** Fallback {{1}} en mode personalized si variable1 absent. */
+const DEFAULT_VARIABLE1 = 'Client';
 
 @Injectable()
 export class WhatsappBroadcastJobsService implements OnModuleInit {
@@ -107,31 +110,59 @@ export class WhatsappBroadcastJobsService implements OnModuleInit {
       throw new BadRequestException({ message: 'templateName requis' });
     }
 
-    const phones = this.normalizeAndDedupePhones(dto.phoneNumbers);
-    if (phones.length === 0) {
-      throw new BadRequestException({
-        message: 'Aucun numéro WhatsApp valide.',
-      });
+    // Si les deux formes sont fournies → recipients (forme B) gagne.
+    const useRecipients =
+      Array.isArray(dto.recipients) && dto.recipients.length > 0;
+
+    let storedPhones: string[] | BroadcastRecipientStored[];
+    let personalized = false;
+    let total = 0;
+
+    if (useRecipients) {
+      personalized = true;
+      const recipients = this.normalizeAndDedupeRecipients(dto.recipients!);
+      if (recipients.length === 0) {
+        throw new BadRequestException({
+          message: 'Aucun numéro WhatsApp valide.',
+        });
+      }
+      storedPhones = recipients;
+      total = recipients.length;
+    } else {
+      const phones = this.normalizeAndDedupePhones(dto.phoneNumbers ?? []);
+      if (phones.length === 0) {
+        throw new BadRequestException({
+          message: 'Aucun numéro WhatsApp valide.',
+        });
+      }
+      storedPhones = phones;
+      total = phones.length;
     }
-    if (phones.length > PHONE_WARN_THRESHOLD) {
+
+    if (total > PHONE_WARN_THRESHOLD) {
       this.logger.warn(
-        `[BroadcastJobs] large job phones=${phones.length} (threshold=${PHONE_WARN_THRESHOLD}) by=${user.id}`,
+        `[BroadcastJobs] large job phones=${total} (threshold=${PHONE_WARN_THRESHOLD}) by=${user.id}`,
       );
     }
 
     const messageConfig: BroadcastMessageConfig = {
       templateName,
       templateLanguage: dto.templateLanguage?.trim() || 'fr',
-      variable1: dto.variable1?.trim() || undefined,
-      components: dto.components?.length
-        ? dto.components.map((c) => ({
-            type: c.type,
-            parameters: c.parameters.map((p) => ({
-              type: p.type,
-              text: p.text,
+      personalized,
+      // Globaux uniquement en forme A (ignorés en mode personalized).
+      variable1: personalized
+        ? undefined
+        : dto.variable1?.trim() || undefined,
+      components:
+        personalized || !dto.components?.length
+          ? undefined
+          : dto.components.map((c) => ({
+              type: c.type,
+              parameters: c.parameters.map((p) => ({
+                type: p.type,
+                text: p.text,
+              })),
             })),
-          }))
-        : undefined,
     };
 
     const now = new Date().toISOString();
@@ -142,8 +173,8 @@ export class WhatsappBroadcastJobsService implements OnModuleInit {
         created_by: user.id,
         status: 'pending',
         message_config: messageConfig,
-        phone_numbers: phones,
-        total: phones.length,
+        phone_numbers: storedPhones,
+        total,
         sent: 0,
         failed: 0,
         cursor_index: 0,
@@ -163,11 +194,11 @@ export class WhatsappBroadcastJobsService implements OnModuleInit {
 
     const jobId = String((data as BroadcastJobRow).id);
     this.logger.log(
-      `[BroadcastJobs] created jobId=${jobId} total=${phones.length} by=${user.id}`,
+      `[BroadcastJobs] created jobId=${jobId} total=${total} personalized=${personalized} by=${user.id}`,
     );
     this.kick();
 
-    return { jobId, total: phones.length, status: 'pending' };
+    return { jobId, total, status: 'pending' };
   }
 
   async listJobs(user: AppUser): Promise<{ items: BroadcastJobListItem[] }> {
@@ -347,16 +378,17 @@ export class WhatsappBroadcastJobsService implements OnModuleInit {
 
   private async runJob(job: BroadcastJobRow): Promise<void> {
     const jobId = String(job.id);
-    const phones = parsePhoneNumbers(job.phone_numbers);
+    const recipients = parseBroadcastRecipients(job.phone_numbers);
     const config = parseMessageConfig(job.message_config);
+    const personalized = config.personalized === true;
     let sent = Number(job.sent ?? 0);
     let failed = Number(job.failed ?? 0);
     let cursor = Number(job.cursor_index ?? 0);
-    const total = Number(job.total ?? phones.length);
+    const total = Number(job.total ?? recipients.length);
     const delayMs = this.delayMs();
 
     this.logger.log(
-      `[BroadcastJobs] start jobId=${jobId} total=${total} cursor=${cursor} delayMs=${delayMs}`,
+      `[BroadcastJobs] start jobId=${jobId} total=${total} cursor=${cursor} personalized=${personalized} delayMs=${delayMs}`,
     );
     this.emitProgress({
       jobId,
@@ -369,7 +401,7 @@ export class WhatsappBroadcastJobsService implements OnModuleInit {
     let lastProgressAt = Date.now();
     let phonesSinceProgress = 0;
 
-    for (let i = cursor; i < phones.length; i += 1) {
+    for (let i = cursor; i < recipients.length; i += 1) {
       const cancelled = await this.isCancelled(jobId);
       if (cancelled) {
         const now = new Date().toISOString();
@@ -402,26 +434,38 @@ export class WhatsappBroadcastJobsService implements OnModuleInit {
         return;
       }
 
-      const phoneNumber = phones[i]!;
-      const phone = normalizePhoneNumber(phoneNumber);
+      const recipient = recipients[i]!;
+      const phone = normalizePhoneNumber(recipient.phoneNumber);
 
       if (!phone) {
         failed += 1;
         await this.insertResult({
           jobId,
-          phoneNumber,
+          phoneNumber: recipient.phoneNumber,
           success: false,
           error: 'Numéro WhatsApp invalide.',
         });
       } else {
         try {
-          const out = await this.whatsapp.sendBroadcastTemplateToPhone({
-            phone,
-            templateName: config.templateName,
-            templateLanguage: config.templateLanguage,
-            variable1: config.variable1,
-            components: config.components,
-          });
+          const sendArgs = personalized
+            ? {
+                phone,
+                templateName: config.templateName,
+                templateLanguage: config.templateLanguage,
+                // Mode perso : variable1 du destinataire, fallback "Client".
+                variable1: recipient.variable1?.trim() || DEFAULT_VARIABLE1,
+                components: undefined,
+              }
+            : {
+                phone,
+                templateName: config.templateName,
+                templateLanguage: config.templateLanguage,
+                variable1: config.variable1,
+                components: config.components,
+              };
+
+          const out =
+            await this.whatsapp.sendBroadcastTemplateToPhone(sendArgs);
           sent += 1;
           await this.insertResult({
             jobId,
@@ -465,7 +509,7 @@ export class WhatsappBroadcastJobsService implements OnModuleInit {
         lastProgressAt = nowMs;
       }
 
-      if (i < phones.length - 1) {
+      if (i < recipients.length - 1) {
         await this.delay(delayMs);
       }
     }
@@ -612,6 +656,25 @@ export class WhatsappBroadcastJobsService implements OnModuleInit {
       if (!phone || seen.has(phone)) continue;
       seen.add(phone);
       out.push(phone);
+    }
+    return out;
+  }
+
+  /** Déduplique par phone normalisé ; conserve le premier variable1. */
+  private normalizeAndDedupeRecipients(
+    raw: Array<{ phoneNumber: string; variable1?: string }>,
+  ): BroadcastRecipientStored[] {
+    const seen = new Set<string>();
+    const out: BroadcastRecipientStored[] = [];
+    for (const item of raw) {
+      const phone = normalizePhoneNumber(String(item.phoneNumber ?? '').trim());
+      if (!phone || seen.has(phone)) continue;
+      seen.add(phone);
+      const v1 = item.variable1?.trim() || undefined;
+      out.push({
+        phoneNumber: phone,
+        ...(v1 ? { variable1: v1 } : {}),
+      });
     }
     return out;
   }

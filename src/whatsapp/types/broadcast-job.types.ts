@@ -11,6 +11,8 @@ export type BroadcastJobStatus = (typeof BROADCAST_JOB_STATUSES)[number];
 export type BroadcastMessageConfig = {
   templateName: string;
   templateLanguage: string;
+  /** true = phone_numbers is [{phoneNumber, variable1?}] */
+  personalized?: boolean;
   variable1?: string;
   components?: Array<{
     type: string;
@@ -18,12 +20,20 @@ export type BroadcastMessageConfig = {
   }>;
 };
 
+/** Entrée stockée dans phone_numbers jsonb (string legacy ou objet perso). */
+export type BroadcastRecipientStored = {
+  phoneNumber: string;
+  /** Absent / vide → worker utilise "Client" en mode personalized. */
+  variable1?: string;
+};
+
 export type BroadcastJobRow = {
   id: string;
   created_by: string | null;
   status: string;
   message_config: BroadcastMessageConfig | unknown;
-  phone_numbers: string[] | unknown;
+  /** string[] (global) OU BroadcastRecipientStored[] (personalized). */
+  phone_numbers: unknown;
   total: number;
   sent: number;
   failed: number;
@@ -92,9 +102,41 @@ function parseJsonField<T>(raw: unknown, fallback: T): T {
 }
 
 export function parsePhoneNumbers(raw: unknown): string[] {
+  return parseBroadcastRecipients(raw).map((r) => r.phoneNumber);
+}
+
+/**
+ * Lit phone_numbers jsonb rétrocompatible :
+ * - string[] (jobs globaux / legacy)
+ * - [{ phoneNumber, variable1? }] (mode personnalisé)
+ */
+export function parseBroadcastRecipients(
+  raw: unknown,
+): BroadcastRecipientStored[] {
   const arr = parseJsonField<unknown[]>(raw, []);
   if (!Array.isArray(arr)) return [];
-  return arr.map((p) => String(p ?? '').trim()).filter(Boolean);
+
+  const out: BroadcastRecipientStored[] = [];
+  for (const item of arr) {
+    if (typeof item === 'string') {
+      const phoneNumber = item.trim();
+      if (phoneNumber) out.push({ phoneNumber });
+      continue;
+    }
+    if (item && typeof item === 'object') {
+      const obj = item as Record<string, unknown>;
+      const phoneNumber = String(
+        obj.phoneNumber ?? obj.phone ?? '',
+      ).trim();
+      if (!phoneNumber) continue;
+      const v1 =
+        typeof obj.variable1 === 'string' && obj.variable1.trim()
+          ? obj.variable1.trim()
+          : undefined;
+      out.push({ phoneNumber, variable1: v1 });
+    }
+  }
+  return out;
 }
 
 export function parseMessageConfig(raw: unknown): BroadcastMessageConfig {
@@ -102,6 +144,7 @@ export function parseMessageConfig(raw: unknown): BroadcastMessageConfig {
   return {
     templateName: String(cfg.templateName ?? '').trim(),
     templateLanguage: String(cfg.templateLanguage ?? 'fr').trim() || 'fr',
+    personalized: cfg.personalized === true,
     variable1:
       typeof cfg.variable1 === 'string' && cfg.variable1.trim()
         ? cfg.variable1.trim()
