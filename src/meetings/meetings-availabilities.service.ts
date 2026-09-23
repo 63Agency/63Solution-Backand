@@ -6,7 +6,10 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import type { AppUser } from '../auth/types/app-user';
-import { assertFullAdmin } from '../common/utils/access';
+import {
+  assertCanAccessMeetings,
+  assertFullAdmin,
+} from '../common/utils/access';
 import { isFullAdmin } from '../common/utils/roles';
 import { SupabaseService } from '../supabase/supabase.service';
 import type {
@@ -43,6 +46,7 @@ export class MeetingsAvailabilitiesService {
     query: ListAvailabilitiesQueryDto,
     user: AppUser,
   ): Promise<{ items: AvailabilityDay[] }> {
+    // Gestion de ses propres dispos : admin only.
     assertFullAdmin(user);
     return this.listForUserId(user.id, query);
   }
@@ -52,7 +56,8 @@ export class MeetingsAvailabilitiesService {
     query: ListAvailabilitiesQueryDto,
     user: AppUser,
   ): Promise<{ items: AvailabilityDay[] }> {
-    assertFullAdmin(user);
+    // Lecture pour le calendrier équipe : admin + admin_whatsapp + fixed_meeting.
+    assertCanAccessMeetings(user);
     const tid = targetUserId.trim();
     if (!tid) {
       throw new BadRequestException({ message: 'userId requis' });

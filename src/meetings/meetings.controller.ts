@@ -95,7 +95,7 @@ export class MeetingsController {
     await this.blockedDays.remove(id, req.user);
   }
 
-  /** Mes disponibilités (admin only). */
+  /** Mes disponibilités (admin only — gestion). */
   @Get('availabilities')
   listMyAvailabilities(
     @Query() query: ListAvailabilitiesQueryDto,
@@ -104,7 +104,10 @@ export class MeetingsController {
     return this.availabilities.listMine(query, req.user);
   }
 
-  /** Disponibilités d’un admin (picker ; admin only). */
+  /**
+   * Disponibilités d’un admin (picker calendrier).
+   * Lecture : admin + admin_whatsapp + fixed_meeting.
+   */
   @Get('availabilities/:userId')
   listAdminAvailabilities(
     @Param('userId') userId: string,
