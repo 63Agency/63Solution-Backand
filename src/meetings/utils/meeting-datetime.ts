@@ -1,4 +1,23 @@
-const TZ = 'Africa/Casablanca';
+import { DateTime } from 'luxon';
+
+/** IANA zone — tracks Morocco's legal time (UTC+1 until 2026-09-20, then permanent UTC+0). */
+export const CASABLANCA_TZ = 'Africa/Casablanca';
+
+function toUtcDateTime(iso: string | Date): DateTime {
+  return typeof iso === 'string'
+    ? DateTime.fromISO(iso, { zone: 'utc' })
+    : DateTime.fromJSDate(iso, { zone: 'utc' });
+}
+
+function toCasablanca(iso: string | Date): DateTime {
+  const local = toUtcDateTime(iso).setZone(CASABLANCA_TZ);
+  if (!local.isValid) {
+    throw new Error(
+      `conversion Africa/Casablanca impossible: ${local.invalidReason ?? 'unknown'}`,
+    );
+  }
+  return local;
+}
 
 /**
  * Format meeting date + time in Africa/Casablanca (fr).
@@ -9,27 +28,11 @@ export function formatMeetingDate(iso: string | Date): {
   date: string;
   time: string;
 } {
-  const d = typeof iso === 'string' ? new Date(iso) : iso;
-
-  const date = new Intl.DateTimeFormat('fr-FR', {
-    timeZone: TZ,
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric',
-  }).format(d);
-
-  const parts = new Intl.DateTimeFormat('fr-FR', {
-    timeZone: TZ,
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  }).formatToParts(d);
-
-  const hour = parts.find((p) => p.type === 'hour')?.value ?? '00';
-  const minute = parts.find((p) => p.type === 'minute')?.value ?? '00';
-  const time = `${hour}h${minute}`;
-
-  return { date, time };
+  const local = toCasablanca(iso).setLocale('fr');
+  return {
+    date: local.toFormat('d MMMM yyyy'),
+    time: local.toFormat("HH'h'mm"),
+  };
 }
 
 /** @deprecated use formatMeetingDate().date */
@@ -60,69 +63,44 @@ export function firstNameOnly(fullName: string): string {
 
 /** YYYY-MM-DD in Africa/Casablanca for a given instant. */
 export function casablancaDateKeyFromIso(iso: string | Date): string {
-  const d = typeof iso === 'string' ? new Date(iso) : iso;
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone: TZ,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).format(d);
-}
-
-/** @deprecated use casablancaDateKeyFromIso */
-function casablancaDateKey(ref: Date): string {
-  return casablancaDateKeyFromIso(ref);
+  return toCasablanca(iso).toISODate()!;
 }
 
 /**
- * Convert a Casablanca local calendar date + time to a UTC Date.
- * Morocco observes UTC+01:00 year-round (no DST since 2018).
+ * Convert a Casablanca local calendar date + time to a UTC Date
+ * via IANA Africa/Casablanca (no hardcoded offset).
  */
 function casablancaLocalToUtc(dateKey: string, time: string): Date {
-  return new Date(`${dateKey}T${time}+01:00`);
+  const dt = DateTime.fromISO(`${dateKey}T${time}`, {
+    zone: CASABLANCA_TZ,
+  });
+  if (!dt.isValid) {
+    throw new Error(
+      `conversion Africa/Casablanca impossible: ${dt.invalidReason ?? 'unknown'}`,
+    );
+  }
+  return dt.toUTC().toJSDate();
 }
 
-/** Start/end of "today" in Africa/Casablanca as UTC ISO strings. */
+/** Start/end of "today" in Africa/Casablanca as UTC ISO strings (end exclusive). */
 export function casablancaDayBounds(ref = new Date()): {
   startIso: string;
   endIso: string;
 } {
-  const dateKey = casablancaDateKey(ref);
-  const start = casablancaLocalToUtc(dateKey, '00:00:00');
-  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
-  return { startIso: start.toISOString(), endIso: end.toISOString() };
+  const start = toCasablanca(ref).startOf('day').toUTC();
+  const end = start.plus({ days: 1 });
+  return { startIso: start.toISO()!, endIso: end.toISO()! };
 }
 
-/** Monday 00:00 → next Monday 00:00 in Africa/Casablanca. */
+/** Monday 00:00 → next Monday 00:00 in Africa/Casablanca (end exclusive). */
 export function casablancaWeekBounds(ref = new Date()): {
   startIso: string;
   endIso: string;
 } {
-  const dateKey = casablancaDateKey(ref);
-  const weekday = new Intl.DateTimeFormat('en-US', {
-    timeZone: TZ,
-    weekday: 'short',
-  }).format(ref);
-
-  const offsetByWeekday: Record<string, number> = {
-    Mon: 0,
-    Tue: 1,
-    Wed: 2,
-    Thu: 3,
-    Fri: 4,
-    Sat: 5,
-    Sun: 6,
-  };
-  const daysFromMonday = offsetByWeekday[weekday] ?? 0;
-
-  const [y, m, d] = dateKey.split('-').map(Number);
-  const monday = new Date(Date.UTC(y, m - 1, d));
-  monday.setUTCDate(monday.getUTCDate() - daysFromMonday);
-  const mondayKey = `${monday.getUTCFullYear()}-${String(
-    monday.getUTCMonth() + 1,
-  ).padStart(2, '0')}-${String(monday.getUTCDate()).padStart(2, '0')}`;
-
-  const start = casablancaLocalToUtc(mondayKey, '00:00:00');
-  const end = new Date(start.getTime() + 7 * 24 * 60 * 60 * 1000);
-  return { startIso: start.toISOString(), endIso: end.toISOString() };
+  const local = toCasablanca(ref).startOf('day');
+  // Luxon weekday: Monday = 1 … Sunday = 7
+  const monday = local.minus({ days: local.weekday - 1 });
+  const start = monday.toUTC();
+  const end = monday.plus({ days: 7 }).toUTC();
+  return { startIso: start.toISO()!, endIso: end.toISO()! };
 }

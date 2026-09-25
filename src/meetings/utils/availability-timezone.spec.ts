@@ -30,10 +30,24 @@ describe('availability-timezone', () => {
     });
   });
 
-  describe('localSlotToUtc — Morocco (fixed +01)', () => {
-    it('converts Casablanca local to UTC', () => {
+  describe('localSlotToUtc — Morocco (Africa/Casablanca IANA)', () => {
+    it('pre-2026-09-20: local was UTC+1', () => {
       const utc = localSlotToUtc('2026-07-15', '15:00', 'Africa/Casablanca');
       expect(utc.toISOString()).toBe('2026-07-15T14:00:00.000Z');
+    });
+
+    it('post-2026-09-20: permanent UTC+0 when Node tzdb ≥ 2026c', () => {
+      const tz = process.versions.tz ?? '';
+      const m = /^(\d{4})([a-z])$/i.exec(tz);
+      const has2026c =
+        m != null &&
+        (Number(m[1]) > 2026 || (Number(m[1]) === 2026 && m[2].toLowerCase() >= 'c'));
+      if (!has2026c) {
+        // Node 22.13 ships tz 2024b — skip until runtime is upgraded (e.g. ≥22.23.3).
+        return;
+      }
+      const utc = localSlotToUtc('2026-09-25', '15:00', 'Africa/Casablanca');
+      expect(utc.toISOString()).toBe('2026-09-25T15:00:00.000Z');
     });
   });
 
