@@ -1,6 +1,7 @@
 import { Injectable, InternalServerErrorException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
+import { withEmailSignature } from './email-signature';
 
 type SendMailInput = {
   to: string;
@@ -18,6 +19,7 @@ type SendMailInput = {
  * SMTP account for meeting confirmations / document emails.
  * Uses SMTP_HOST, SMTP_PORT, SMTP_SECURE, SMTP_USER, SMTP_PASS only.
  * Do NOT use for bulk marketing — see BulkMailerService (BULK_SMTP_*).
+ * Toujours append la signature 63 Agency (html + text).
  */
 @Injectable()
 export class MailerService {
@@ -71,13 +73,17 @@ export class MailerService {
     input: SendMailInput,
   ): Promise<{ messageId: string; sentAt: string }> {
     try {
+      const { text, html } = withEmailSignature({
+        text: input.text,
+        html: input.html,
+      });
       const transport = this.createTransport();
       const info = await transport.sendMail({
         from: this.fromAddress(),
         to: input.to,
         subject: input.subject,
-        text: input.text,
-        html: input.html,
+        text,
+        html,
         attachments: input.attachments,
       });
       return {

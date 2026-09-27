@@ -6,6 +6,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
 import type SMTPTransport from 'nodemailer/lib/smtp-transport';
+import { withEmailSignature } from '../common/mailer/email-signature';
 
 type BulkSendMailInput = {
   to: string;
@@ -15,12 +16,10 @@ type BulkSendMailInput = {
 };
 
 /**
- * Dedicated SMTP for /email/broadcast only (info@63agency.ma).
+ * Dedicated SMTP for /email/broadcast + WhatsApp dual-channel email.
  * Completely independent from MailerService (SMTP_* / Contact63@…).
  * Never falls back to SMTP_* — missing BULK_SMTP_* fails loudly.
- *
- * Deliverability: SPF / DKIM / DMARC must be set on 63agency.ma —
- * Nest does not manage DNS.
+ * Toujours append la signature 63 Agency (html + text).
  */
 @Injectable()
 export class BulkMailerService {
@@ -86,6 +85,10 @@ export class BulkMailerService {
   ): Promise<{ messageId: string; sentAt: string }> {
     const { user, fromName } = this.requireBulkConfig();
     const transport = this.createTransport();
+    const { text, html } = withEmailSignature({
+      text: input.text,
+      html: input.html,
+    });
 
     try {
       const info = await transport.sendMail({
@@ -93,8 +96,8 @@ export class BulkMailerService {
         replyTo: user,
         to: input.to,
         subject: input.subject,
-        text: input.text,
-        html: input.html,
+        text,
+        html,
       });
       return {
         messageId: String(info.messageId || ''),

@@ -1,9 +1,9 @@
 /**
- * Signature email partagée (bulk + contact).
+ * Signature email partagée (bulk WA+email, contact, meetings, documents).
  * Tables + CSS inline (Gmail / Outlook).
  *
  * Logo : public/images/IMG_1260.JPEG (servi en static) ou EMAIL_SIGNATURE_LOGO_URL.
- * Sociaux sous le logo : WhatsApp, Facebook, Instagram.
+ * Sociaux sous le logo : WhatsApp, Instagram.
  */
 
 const CONTACT_PHONE_DISPLAY = '+212 6 06 67 67 10';
@@ -11,6 +11,9 @@ const CONTACT_PHONE_TEL = '+212606676710';
 const CONTACT_EMAIL = 'contact@63agency.ma';
 const CONTACT_WEBSITE_URL = 'https://www.63agency.com';
 const CONTACT_WEBSITE_LABEL = '63agency.com';
+
+/** Marker HTML — évite d’ajouter 2× la signature. */
+export const EMAIL_SIGNATURE_MARKER = '<!-- 63agency-email-signature -->';
 
 /**
  * Liens sociaux (homepage 63agency.com).
@@ -59,7 +62,7 @@ function socialIconCell(
   return `<td style="padding:0 6px 0 0;vertical-align:middle;"><a href="${href}" target="_blank" rel="noopener noreferrer" style="text-decoration:none;border:0;">${img}</a></td>`;
 }
 
-/** Colonne gauche : logo image 63 + 3 icônes sociales en dessous. */
+/** Colonne gauche : logo image 63 + icônes sociales en dessous. */
 function logoAndSocialsCell(): string {
   const logoUrl = resolveLogoUrl();
   return `
@@ -103,6 +106,7 @@ function contactRowsHtml(): string {
  */
 export function emailSignatureHtml(): string {
   return `
+${EMAIL_SIGNATURE_MARKER}
 <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;width:100%;max-width:600px;margin-top:28px;">
   <tr>
     <td style="padding:0;background:transparent;">
@@ -127,4 +131,60 @@ ${CONTACT_EMAIL}
 ${CONTACT_WEBSITE_LABEL}
 WhatsApp: ${SOCIAL.whatsapp}
 Instagram: ${SOCIAL.instagram}`;
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function htmlAlreadyHasSignature(html: string): boolean {
+  return (
+    html.includes(EMAIL_SIGNATURE_MARKER) ||
+    html.includes('63agency-email-signature') ||
+    (html.includes('Saad CHAHOUBI') && html.includes('63 AGENCY'))
+  );
+}
+
+function textAlreadyHasSignature(text: string): boolean {
+  return text.includes('Saad CHAHOUBI') && text.includes('63 AGENCY');
+}
+
+/** Append signature HTML (idempotent). */
+export function appendEmailSignatureHtml(html: string): string {
+  const trimmed = html.trimEnd();
+  if (!trimmed) {
+    return emailSignatureHtml();
+  }
+  if (htmlAlreadyHasSignature(trimmed)) return trimmed;
+  return `${trimmed}${emailSignatureHtml()}`;
+}
+
+/** Append signature texte (idempotent). */
+export function appendEmailSignatureText(text: string): string {
+  const trimmed = text.trimEnd();
+  if (textAlreadyHasSignature(trimmed)) return trimmed;
+  return `${trimmed}${emailSignatureText()}`;
+}
+
+/**
+ * Garantit html + text avec signature pour tout envoi SMTP.
+ * Si seul le texte est fourni → HTML simple + signature (logo visible).
+ */
+export function withEmailSignature(input: {
+  text: string;
+  html?: string;
+}): { text: string; html: string } {
+  const text = appendEmailSignatureText(input.text || '');
+  if (input.html?.trim()) {
+    return { text, html: appendEmailSignatureHtml(input.html) };
+  }
+  const bodyHtml = `
+<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6;color:#222;">
+  ${escapeHtml(input.text || '').replace(/\n/g, '<br/>')}
+</div>`.trim();
+  return { text, html: appendEmailSignatureHtml(bodyHtml) };
 }

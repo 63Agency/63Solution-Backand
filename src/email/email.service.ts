@@ -13,10 +13,6 @@ import {
 } from '../common/utils/access';
 import { SupabaseService } from '../supabase/supabase.service';
 import { BulkMailerService } from './bulk-mailer.service';
-import {
-  appendBulkEmailSignature,
-  BULK_EMAIL_SIGNATURE_TEXT,
-} from './bulk-email-signature';
 import type { BroadcastEmailDto } from './dto/broadcast-email.dto';
 import type { UpsertEmailTemplateDto } from './dto/upsert-email-template.dto';
 import {
@@ -265,8 +261,8 @@ export class EmailService {
   }
 
   /**
-   * Envoi unitaire bulk (réutilisé par le worker broadcast multi-canal).
-   * Remplace {{name}} / {{1}}, ajoute la signature, SMTP BULK_*.
+   * Envoi unitaire bulk (réutilisé par le worker broadcast multi-canal WA+email).
+   * Remplace {{name}} / {{1}}. Signature 63 Agency ajoutée dans BulkMailerService.
    */
   async sendOneBroadcastEmail(input: {
     email: string;
@@ -288,12 +284,8 @@ export class EmailService {
     }
 
     const subject = applyNamePlaceholder(subjectTpl, displayName);
-    const html = appendBulkEmailSignature(
-      applyNamePlaceholder(htmlTpl, displayName),
-    );
-    const text =
-      htmlToText(applyNamePlaceholder(htmlTpl, displayName)) +
-      BULK_EMAIL_SIGNATURE_TEXT;
+    const html = applyNamePlaceholder(htmlTpl, displayName);
+    const text = htmlToText(html);
 
     const mailResult = await this.bulkMailer.sendMail({
       to: email,
@@ -377,14 +369,11 @@ export class EmailService {
       for (const recipient of batch) {
         const displayName = recipient.name || 'Client';
         const subject = applyNamePlaceholder(subjectTpl, displayName);
-        const html = appendBulkEmailSignature(
-          applyNamePlaceholder(htmlTpl, displayName),
-        );
-        const text =
-          htmlToText(applyNamePlaceholder(htmlTpl, displayName)) +
-          BULK_EMAIL_SIGNATURE_TEXT;
+        const html = applyNamePlaceholder(htmlTpl, displayName);
+        const text = htmlToText(html);
 
         try {
+          // Signature added centrally in BulkMailerService.withEmailSignature
           const mailResult = await this.bulkMailer.sendMail({
             to: recipient.email,
             subject,

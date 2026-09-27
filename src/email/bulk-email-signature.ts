@@ -1,19 +1,30 @@
 /**
  * Signature bulk = signature partagée (carte HTML).
- * Conservé pour compat imports existants (email.service.ts).
+ * Conservé pour compat imports existants.
+ * L’ajout effectif se fait dans BulkMailerService / MailerService (idempotent).
  */
 import {
+  appendEmailSignatureHtml,
+  appendEmailSignatureText,
   emailSignatureHtml,
   emailSignatureText,
 } from '../common/mailer/email-signature';
 
-/** @deprecated Prefer emailSignatureHtml() — alias pour bulk. */
-export const BULK_EMAIL_SIGNATURE = emailSignatureHtml();
+/** @deprecated Prefer emailSignatureHtml(). */
+export function getBulkEmailSignatureHtml(): string {
+  return emailSignatureHtml();
+}
 
-export const BULK_EMAIL_SIGNATURE_TEXT = emailSignatureText();
+/** @deprecated Prefer emailSignatureText(). */
+export function getBulkEmailSignatureText(): string {
+  return emailSignatureText();
+}
 
 /** Append shared signature to HTML body (after {{name}} replacement). */
 export function appendBulkEmailSignature(htmlBody: string): string {
-  const trimmed = htmlBody.trimEnd();
-  return `${trimmed}${emailSignatureHtml()}`;
+  return appendEmailSignatureHtml(htmlBody);
+}
+
+export function appendBulkEmailSignatureText(textBody: string): string {
+  return appendEmailSignatureText(textBody);
 }
