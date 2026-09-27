@@ -11,6 +11,20 @@ function readString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
+/**
+ * Nombre de variables body Meta = max index des placeholders {{n}}.
+ * Ex. "" → 0 ; "Bonjour {{1}}" → 1 ; "{{1}} … {{3}}" → 3 (même si {{2}} absent).
+ */
+export function countTemplateBodyVariables(body: string): number {
+  if (!body) return 0;
+  let max = 0;
+  for (const match of body.matchAll(/\{\{(\d+)\}\}/g)) {
+    const n = Number(match[1]);
+    if (Number.isFinite(n) && n > max) max = n;
+  }
+  return max;
+}
+
 /** Extract BODY text from Meta `components` array. */
 function extractBodyFromMetaComponents(components: unknown): string {
   if (!Array.isArray(components)) return '';
@@ -118,4 +132,32 @@ export function normalizeWhatsAppTemplates(raw: unknown): WhatsAppTemplate[] {
 
     return isCustomWhatsAppTemplate(template) ? [template] : [];
   });
+}
+
+/** Match name + language (ex. fr / fr_FR). Fallback: name only. */
+export function findTemplateByNameLanguage(
+  templates: WhatsAppTemplate[],
+  name: string,
+  language: string,
+): WhatsAppTemplate | undefined {
+  const n = name.trim().toLowerCase();
+  const lang = language.trim().toLowerCase() || 'fr';
+  if (!n) return undefined;
+
+  const byName = templates.filter((t) => t.name.trim().toLowerCase() === n);
+  if (byName.length === 0) return undefined;
+
+  const exactLang = byName.find((t) => {
+    const tl = (t.language ?? '').trim().toLowerCase();
+    return (
+      tl === lang || tl.startsWith(`${lang}_`) || tl.startsWith(`${lang}-`)
+    );
+  });
+  if (exactLang) return exactLang;
+
+  const loose = byName.find((t) => {
+    const tl = (t.language ?? '').trim().toLowerCase();
+    return tl.startsWith(lang.slice(0, 2));
+  });
+  return loose ?? byName[0];
 }

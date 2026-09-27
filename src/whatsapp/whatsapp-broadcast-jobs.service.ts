@@ -36,6 +36,10 @@ import {
 } from './types/broadcast-job.types';
 import { normalizePhoneNumber } from './utils/phone';
 import {
+  countTemplateBodyVariables,
+  findTemplateByNameLanguage,
+} from './utils/whatsapp-templates';
+import {
   extractSendErrorMessage,
   WhatsappService,
 } from './whatsapp.service';
@@ -51,8 +55,70 @@ const PROGRESS_EVERY_N = 5;
 const PROGRESS_MIN_MS = 1000;
 const DEFAULT_VARIABLE1 = 'Client';
 
+type BroadcastBodyComponent = {
+  type: string;
+  parameters: Array<{ type: string; text: string }>;
+};
+
 function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+/**
+ * Construit exactement `expectedCount` textes body pour Meta.
+ * expectedCount=0 → [].
+ */
+function buildBodyParamTexts(
+  expectedCount: number,
+  recipient: BroadcastRecipientStored,
+  config: BroadcastMessageConfig,
+  personalized: boolean,
+): string[] {
+  if (expectedCount <= 0) return [];
+
+  let fromComponents: string[] = [];
+  if (!personalized && Array.isArray(config.components)) {
+    fromComponents = config.components
+      .filter((c) => String(c.type).toLowerCase() === 'body')
+      .flatMap((c) => c.parameters ?? [])
+      .map((p) => String(p.text ?? '').trim())
+      .filter((t) => t && !/^\{\{\d+\}\}$/.test(t));
+  }
+
+  const texts: string[] = [];
+  for (let i = 1; i <= expectedCount; i += 1) {
+    if (fromComponents[i - 1]) {
+      texts.push(fromComponents[i - 1]!);
+      continue;
+    }
+    if (i === 1) {
+      const v1 = personalized
+        ? recipient.variable1?.trim() ||
+          recipient.name?.trim() ||
+          DEFAULT_VARIABLE1
+        : config.variable1?.trim() || DEFAULT_VARIABLE1;
+      texts.push(v1 || DEFAULT_VARIABLE1);
+      continue;
+    }
+    const extra = (recipient as Record<string, unknown>)[`variable${i}`];
+    const raw =
+      typeof extra === 'string' && extra.trim() ? extra.trim() : '';
+    // Meta reject empty body params — use a controlled placeholder.
+    texts.push(raw || '-');
+  }
+  return texts;
+}
+
+function bodyComponentsFromTexts(
+  texts: string[],
+): BroadcastBodyComponent[] | undefined {
+  if (texts.length === 0) return undefined;
+  return [
+    {
+      type: 'body',
+      parameters: texts.map((text) => ({ type: 'text', text })),
+    },
+  ];
 }
 
 @Injectable()
@@ -403,8 +469,13 @@ export class WhatsappBroadcastJobsService implements OnModuleInit {
     const total = Number(job.total ?? recipients.length);
     const delayMs = this.delayMs();
 
+    // Cache once per job: how many body {{n}} the chosen WA template expects.
+    const expectedBodyVars = channels.whatsapp
+      ? await this.resolveExpectedBodyVars(config)
+      : 0;
+
     this.logger.log(
-      `[BroadcastJobs] start jobId=${jobId} total=${total} wa=${channels.whatsapp} email=${channels.email}`,
+      `[BroadcastJobs] start jobId=${jobId} total=${total} wa=${channels.whatsapp} email=${channels.email} template=${config.templateName ?? '-'} expectedBodyVars=${expectedBodyVars}`,
     );
     this.emitProgress({
       jobId,
@@ -477,18 +548,22 @@ export class WhatsappBroadcastJobsService implements OnModuleInit {
           waError = 'Numéro WhatsApp manquant ou invalide.';
           waFailed += 1;
         } else {
+          const paramTexts = buildBodyParamTexts(
+            expectedBodyVars,
+            recipient,
+            config,
+            personalized,
+          );
+          const components = bodyComponentsFromTexts(paramTexts);
           try {
-            const variable1 = personalized
-              ? recipient.variable1?.trim() ||
-                recipient.name?.trim() ||
-                DEFAULT_VARIABLE1
-              : config.variable1;
+            // Always drive Meta via explicit body components (or none if K=0).
+            // Never pass variable1 here — avoids forcing 1 param on 0-var templates.
             const out = await this.whatsapp.sendBroadcastTemplateToPhone({
               phone,
               templateName: config.templateName || '',
               templateLanguage: config.templateLanguage,
-              variable1: personalized ? variable1 : config.variable1,
-              components: personalized ? undefined : config.components,
+              variable1: undefined,
+              components,
             });
             waSuccess = true;
             conversationId = out.conversationId;
@@ -496,10 +571,13 @@ export class WhatsappBroadcastJobsService implements OnModuleInit {
             waSent += 1;
           } catch (err: unknown) {
             waSuccess = false;
-            waError = extractSendErrorMessage(err);
+            const base = extractSendErrorMessage(err);
+            waError =
+              `${base} (template ${config.templateName || '?'} ` +
+              `attend ${expectedBodyVars} param(s) body, envoyé=${paramTexts.length})`;
             waFailed += 1;
             this.logger.warn(
-              `[BroadcastJobs] WA fail jobId=${jobId} phone=${phone}: ${waError}`,
+              `[BroadcastJobs] WA fail jobId=${jobId} phone=${phone} template=${config.templateName} expectedBodyVars=${expectedBodyVars} sentParams=${paramTexts.length}: ${base}`,
             );
           }
         }
@@ -807,6 +885,44 @@ export class WhatsappBroadcastJobsService implements OnModuleInit {
       });
     }
     return out;
+  }
+
+  /**
+   * Une fois par job : listTemplates → body → count {{n}}.
+   * Template introuvable / erreur API → 0 (aucun body param) pour éviter #132000.
+   */
+  private async resolveExpectedBodyVars(
+    config: BroadcastMessageConfig,
+  ): Promise<number> {
+    const templateName = (config.templateName ?? '').trim();
+    const templateLanguage = (config.templateLanguage || 'fr').trim();
+    if (!templateName) return 0;
+
+    try {
+      const { templates } = await this.whatsapp.listTemplates();
+      const match = findTemplateByNameLanguage(
+        templates,
+        templateName,
+        templateLanguage,
+      );
+      if (!match) {
+        this.logger.warn(
+          `[BroadcastJobs] template "${templateName}"/${templateLanguage} introuvable dans listTemplates — assume 0 body var (pas de components)`,
+        );
+        return 0;
+      }
+      const n = countTemplateBodyVariables(match.body);
+      this.logger.log(
+        `[BroadcastJobs] template meta name=${match.name} lang=${match.language ?? '?'} bodyVars=${n} bodyPreview=${JSON.stringify(match.body.slice(0, 120))}`,
+      );
+      return n;
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger.warn(
+        `[BroadcastJobs] listTemplates failed for "${templateName}": ${msg} — assume 0 body var`,
+      );
+      return 0;
+    }
   }
 
   private delayMs(): number {
