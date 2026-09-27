@@ -19,15 +19,23 @@ import {
   mapUserToMe,
   mapUserToTeamItem,
   USER_PUBLIC_COLUMNS,
+  type TeamUserItem,
   type UserDbRow,
 } from '../common/utils/user-response';
+import { PresenceService } from '../realtime/presence.service';
+import { RealtimeService } from '../realtime/realtime.service';
 import { SupabaseService } from '../supabase/supabase.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
+import { UpdateUserDto } from './dto/update-user.dto';
 
 @Injectable()
 export class UsersService {
-  constructor(private readonly supabase: SupabaseService) {}
+  constructor(
+    private readonly supabase: SupabaseService,
+    private readonly presence: PresenceService,
+    private readonly realtime: RealtimeService,
+  ) {}
 
   private assertAdmin(user: AppUser): void {
     assertFullAdmin(user);
@@ -45,6 +53,12 @@ export class UsersService {
       });
     }
     return trimmed;
+  }
+
+  private toTeamItem(row: UserDbRow): TeamUserItem {
+    return mapUserToTeamItem(row, {
+      online: this.presence.isOnline(row.id),
+    });
   }
 
   async updateMe(user: AppUser, dto: UpdateProfileDto) {
@@ -80,6 +94,9 @@ export class UsersService {
     }
 
     const mapped = mapUserToMe(data as UserDbRow);
+    const teamItem = this.toTeamItem(data as UserDbRow);
+    this.realtime.emitEmployeeUpdated(teamItem);
+
     return {
       user: mapped,
       route: recommendedRoute(mapped.role),
@@ -89,10 +106,11 @@ export class UsersService {
 
   /**
    * Liste équipe (lecture).
-   * admin + admin_whatsapp (picker assignees RDV).
+   * admin + admin_whatsapp (picker assignees RDV + page Employees).
    * fixed_meeting → 403 (utiliser GET /meetings/assignable-users si besoin).
+   * `online` = présence socket en mémoire ; `lastSeen` = colonne DB.
    */
-  async list(user: AppUser) {
+  async list(user: AppUser): Promise<TeamUserItem[]> {
     if (!isFullAdmin(user.role) && !isWhatsappAdmin(user.role)) {
       throw new ForbiddenException({
         message: 'Accès à la liste des utilisateurs non autorisé.',
@@ -111,13 +129,10 @@ export class UsersService {
       });
     }
 
-    const items = (data ?? []).map((row) =>
-      mapUserToTeamItem(row as UserDbRow),
-    );
-    return items;
+    return (data ?? []).map((row) => this.toTeamItem(row as UserDbRow));
   }
 
-  async create(actor: AppUser, dto: CreateUserDto) {
+  async create(actor: AppUser, dto: CreateUserDto): Promise<TeamUserItem> {
     this.assertAdmin(actor);
 
     const sb = this.supabase.getClient();
@@ -161,7 +176,96 @@ export class UsersService {
       });
     }
 
-    return mapUserToTeamItem(data as UserDbRow);
+    const item = this.toTeamItem(data as UserDbRow);
+    this.realtime.emitEmployeeCreated(item);
+    return item;
+  }
+
+  async update(
+    actor: AppUser,
+    targetId: string,
+    dto: UpdateUserDto,
+  ): Promise<TeamUserItem> {
+    this.assertAdmin(actor);
+
+    const sb = this.supabase.getClient();
+    const { data: target, error: findError } = await sb
+      .from('users')
+      .select(USER_PUBLIC_COLUMNS)
+      .eq('id', targetId)
+      .maybeSingle();
+
+    if (findError || !target) {
+      throw new NotFoundException({ message: 'Utilisateur introuvable.' });
+    }
+
+    const patch: Record<string, unknown> = {};
+
+    if (dto.prenom !== undefined) patch.prenom = dto.prenom.trim();
+    if (dto.nom !== undefined) patch.nom = dto.nom.trim();
+    if (dto.telephone !== undefined) {
+      patch.telephone =
+        dto.telephone === null ? null : String(dto.telephone).trim();
+    }
+    if (dto.ville !== undefined) {
+      patch.ville = dto.ville === null ? null : String(dto.ville).trim();
+    }
+
+    if (dto.email !== undefined) {
+      const email = dto.email.trim().toLowerCase();
+      if (email !== String(target.email).toLowerCase()) {
+        const { data: existing } = await sb
+          .from('users')
+          .select('id')
+          .eq('email', email)
+          .maybeSingle();
+        if (existing) {
+          throw new ConflictException({
+            message: 'Cet email est déjà utilisé.',
+          });
+        }
+      }
+      patch.email = email;
+    }
+
+    if (dto.role !== undefined) {
+      const nextRole = normalizeApiRole(dto.role);
+      const currentRole = normalizeApiRole(target.role as string);
+      if (currentRole === 'admin' && nextRole !== 'admin') {
+        await this.assertNotLastAdmin(targetId);
+      }
+      patch.role = nextRole;
+    }
+
+    if (dto.password !== undefined) {
+      patch.password_hash = await bcrypt.hash(dto.password, 10);
+    }
+
+    const avatarUrl = this.resolveAvatarUrl(dto.avatarUrl);
+    if (avatarUrl !== undefined) {
+      patch.avatar_url = avatarUrl;
+    }
+
+    if (Object.keys(patch).length === 0) {
+      return this.toTeamItem(target as UserDbRow);
+    }
+
+    const { data, error } = await sb
+      .from('users')
+      .update(patch)
+      .eq('id', targetId)
+      .select(USER_PUBLIC_COLUMNS)
+      .single();
+
+    if (error || !data) {
+      throw new ConflictException({
+        message: error?.message ?? 'Mise à jour impossible.',
+      });
+    }
+
+    const item = this.toTeamItem(data as UserDbRow);
+    this.realtime.emitEmployeeUpdated(item);
+    return item;
   }
 
   async remove(actor: AppUser, targetId: string): Promise<void> {
@@ -186,25 +290,7 @@ export class UsersService {
     }
 
     if (normalizeApiRole(target.role as string) === 'admin') {
-      const { data: allUsers, error: listError } = await sb
-        .from('users')
-        .select('id, role');
-
-      if (listError) {
-        throw new NotFoundException({
-          message: listError.message ?? 'Impossible de vérifier les admins.',
-        });
-      }
-
-      const adminCount = (allUsers ?? []).filter((u) =>
-        isFullAdmin(u.role as string),
-      ).length;
-
-      if (adminCount <= 1) {
-        throw new ForbiddenException({
-          message: 'Impossible de supprimer le dernier administrateur.',
-        });
-      }
+      await this.assertNotLastAdmin(targetId);
     }
 
     const { error: deleteError } = await sb
@@ -215,6 +301,33 @@ export class UsersService {
     if (deleteError) {
       throw new NotFoundException({
         message: deleteError.message ?? 'Suppression impossible.',
+      });
+    }
+
+    this.realtime.emitEmployeeDeleted({ id: targetId });
+  }
+
+  private async assertNotLastAdmin(excludeUserId: string): Promise<void> {
+    const { data: allUsers, error: listError } = await this.supabase
+      .getClient()
+      .from('users')
+      .select('id, role');
+
+    if (listError) {
+      throw new NotFoundException({
+        message: listError.message ?? 'Impossible de vérifier les admins.',
+      });
+    }
+
+    const adminCount = (allUsers ?? []).filter(
+      (u) =>
+        u.id !== excludeUserId && isFullAdmin(u.role as string),
+    ).length;
+
+    // Count remaining admins AFTER removing/demoting excludeUserId
+    if (adminCount < 1) {
+      throw new ForbiddenException({
+        message: 'Impossible de supprimer ou rétrograder le dernier administrateur.',
       });
     }
   }

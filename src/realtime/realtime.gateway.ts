@@ -17,10 +17,11 @@ import { CORS_ORIGINS } from '../common/cors-origins';
 import {
   canAccessLeads,
   canAccessWhatsapp,
+  isFullAdmin,
   normalizeApiRole,
 } from '../common/utils/roles';
-import { USER_PUBLIC_COLUMNS } from '../common/utils/user-response';
 import { SupabaseService } from '../supabase/supabase.service';
+import { PresenceService } from './presence.service';
 import {
   REALTIME_EVENTS,
   REALTIME_ROOMS,
@@ -45,6 +46,7 @@ export class RealtimeGateway
 
   constructor(
     private readonly realtime: RealtimeService,
+    private readonly presence: PresenceService,
     private readonly jwt: JwtService,
     private readonly config: ConfigService,
     private readonly supabase: SupabaseService,
@@ -70,9 +72,24 @@ export class RealtimeGateway
         await client.join(REALTIME_ROOMS.NOTIFICATIONS);
         rooms.push(REALTIME_ROOMS.WHATSAPP, REALTIME_ROOMS.NOTIFICATIONS);
       }
+      if (isFullAdmin(user.role)) {
+        await client.join(REALTIME_ROOMS.PRESENCE);
+        rooms.push(REALTIME_ROOMS.PRESENCE);
+      }
+
+      const becameOnline = this.presence.trackConnect(user.id, client.id);
+      const lastSeen = await this.touchLastSeen(user.id);
+
+      if (becameOnline) {
+        this.realtime.emitPresenceUpdate({
+          userId: user.id,
+          online: true,
+          lastSeen,
+        });
+      }
 
       this.logger.log(
-        `socket connected id=${client.id} user=${user.email} role=${user.role} rooms=${rooms.join(',') || '(none)'}`,
+        `socket connected id=${client.id} user=${user.email} role=${user.role} rooms=${rooms.join(',') || '(none)'} online=${this.presence.isOnline(user.id)}`,
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -83,9 +100,22 @@ export class RealtimeGateway
     }
   }
 
-  handleDisconnect(client: AuthedSocket): void {
-    const email = client.data.user?.email ?? '?';
+  async handleDisconnect(client: AuthedSocket): Promise<void> {
+    const user = client.data.user;
+    const email = user?.email ?? '?';
     this.logger.log(`socket disconnected id=${client.id} user=${email}`);
+
+    if (!user?.id) return;
+
+    const becameOffline = this.presence.trackDisconnect(user.id, client.id);
+    if (!becameOffline) return;
+
+    const lastSeen = await this.touchLastSeen(user.id);
+    this.realtime.emitPresenceUpdate({
+      userId: user.id,
+      online: false,
+      lastSeen,
+    });
   }
 
   @SubscribeMessage('ping')
@@ -111,6 +141,26 @@ export class RealtimeGateway
       user: client.data.user ?? null,
       rooms,
     };
+  }
+
+  private async touchLastSeen(userId: string): Promise<string> {
+    const lastSeen = new Date().toISOString();
+    try {
+      const { error } = await this.supabase
+        .getClient()
+        .from('users')
+        .update({ last_seen: lastSeen })
+        .eq('id', userId);
+      if (error) {
+        this.logger.warn(
+          `last_seen update failed user=${userId}: ${error.message}`,
+        );
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`last_seen update error user=${userId}: ${message}`);
+    }
+    return lastSeen;
   }
 
   private extractToken(client: Socket): string | null {
@@ -156,7 +206,9 @@ export class RealtimeGateway
     const { data, error } = await this.supabase
       .getClient()
       .from('users')
-      .select(USER_PUBLIC_COLUMNS)
+      .select(
+        'id, email, role, prenom, nom, telephone, ville, avatar_url',
+      )
       .eq('id', payload.sub)
       .maybeSingle();
 

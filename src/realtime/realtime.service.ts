@@ -127,4 +127,41 @@ export class RealtimeService {
       failed: payload.waFailed,
     });
   }
+
+  /** Changement online / offline (room presence = full admins). */
+  emitPresenceUpdate(payload: {
+    userId: string;
+    online: boolean;
+    lastSeen: string | null;
+  }): void {
+    this.emitToRoom(
+      REALTIME_ROOMS.PRESENCE,
+      REALTIME_EVENTS.PRESENCE_UPDATE,
+      payload,
+    );
+  }
+
+  emitEmployeeCreated(payload: unknown): void {
+    this.emitToRoom(
+      REALTIME_ROOMS.PRESENCE,
+      REALTIME_EVENTS.EMPLOYEE_CREATED,
+      payload,
+    );
+  }
+
+  emitEmployeeUpdated(payload: unknown): void {
+    this.emitToRoom(
+      REALTIME_ROOMS.PRESENCE,
+      REALTIME_EVENTS.EMPLOYEE_UPDATED,
+      payload,
+    );
+  }
+
+  emitEmployeeDeleted(payload: { id: string }): void {
+    this.emitToRoom(
+      REALTIME_ROOMS.PRESENCE,
+      REALTIME_EVENTS.EMPLOYEE_DELETED,
+      payload,
+    );
+  }
 }
