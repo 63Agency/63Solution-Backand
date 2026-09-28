@@ -8,6 +8,8 @@
 
 const CONTACT_PHONE_DISPLAY = '+212 6 06 67 67 10';
 const CONTACT_PHONE_TEL = '+212606676710';
+/** Même numéro que CONTACT_PHONE_TEL (wa.me sans +). */
+const CONTACT_PHONE_WA = CONTACT_PHONE_TEL.replace(/\D/g, '');
 const CONTACT_EMAIL = 'contact@63agency.ma';
 const CONTACT_WEBSITE_URL = 'https://www.63agency.com';
 const CONTACT_WEBSITE_LABEL = '63agency.com';
@@ -16,11 +18,11 @@ const CONTACT_WEBSITE_LABEL = '63agency.com';
 export const EMAIL_SIGNATURE_MARKER = '<!-- 63agency-email-signature -->';
 
 /**
- * Liens sociaux (homepage 63agency.com).
- * Sous le logo : WhatsApp + Instagram uniquement.
+ * Liens sociaux.
+ * WhatsApp = même numéro que la ligne téléphone de la signature.
  */
 const SOCIAL = {
-  whatsapp: 'https://wa.me/212720007007',
+  whatsapp: `https://wa.me/${CONTACT_PHONE_WA}`,
   instagram: 'https://www.instagram.com/',
 } as const;
 
