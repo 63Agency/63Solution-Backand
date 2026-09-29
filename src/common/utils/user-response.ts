@@ -1,8 +1,11 @@
 import { normalizeApiRole } from './roles';
 
+/** Défaut affichage / API si users.timezone est NULL. */
+export const DEFAULT_USER_TIMEZONE = 'Africa/Casablanca';
+
 /** Colonnes publiques (sans password_hash). */
 export const USER_PUBLIC_COLUMNS =
-  'id, email, role, prenom, nom, telephone, ville, avatar_url, created_at, last_seen';
+  'id, email, role, prenom, nom, telephone, ville, avatar_url, created_at, last_seen, timezone';
 
 export type UserDbRow = {
   id: string;
@@ -15,6 +18,7 @@ export type UserDbRow = {
   avatar_url?: string | null;
   created_at?: string | null;
   last_seen?: string | null;
+  timezone?: string | null;
 };
 
 export type TeamUserItem = {
@@ -26,10 +30,17 @@ export type TeamUserItem = {
   ville: string;
   role: ReturnType<typeof normalizeApiRole>;
   avatarUrl: string | null;
+  timezone: string;
   createdAt?: string;
   lastSeen: string | null;
   online: boolean;
 };
+
+/** IANA effectif pour l’API (NULL DB → Africa/Casablanca). */
+export function resolveUserTimezone(raw: string | null | undefined): string {
+  const t = typeof raw === 'string' ? raw.trim() : '';
+  return t || DEFAULT_USER_TIMEZONE;
+}
 
 export function mapUserToMe(row: UserDbRow) {
   const avatarRaw = row.avatar_url?.trim() ?? '';
@@ -42,6 +53,7 @@ export function mapUserToMe(row: UserDbRow) {
     telephone: row.telephone?.trim() ?? '',
     ville: row.ville?.trim() ?? '',
     avatarUrl: avatarRaw || null,
+    timezone: resolveUserTimezone(row.timezone),
   };
 }
 
@@ -59,6 +71,7 @@ export function mapUserToTeamItem(
     ville: row.ville?.trim() ?? '',
     role: normalizeApiRole(row.role),
     avatarUrl: avatarRaw || null,
+    timezone: resolveUserTimezone(row.timezone),
     createdAt: row.created_at
       ? new Date(row.created_at).toISOString()
       : undefined,

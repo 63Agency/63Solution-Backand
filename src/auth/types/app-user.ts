@@ -7,4 +7,6 @@ export type AppUser = {
   telephone: string | null;
   ville: string | null;
   avatarUrl: string | null;
+  /** IANA (défaut Africa/Casablanca si NULL en DB). */
+  timezone: string;
 };

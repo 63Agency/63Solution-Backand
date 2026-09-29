@@ -84,7 +84,10 @@ function isPathAllowed(
   const normalized = normalizeApiPath(path);
   const verb = method.toUpperCase();
 
-  if (normalized === '/users/me' && (verb === 'GET' || verb === 'PATCH')) {
+  if (
+    (normalized === '/users/me' || normalized.startsWith('/users/me/')) &&
+    (verb === 'GET' || verb === 'PATCH')
+  ) {
     return true;
   }
 

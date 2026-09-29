@@ -15,6 +15,7 @@ import { AuthGuard } from '@nestjs/passport';
 import type { AppUser } from '../auth/types/app-user';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
+import { UpdateTimezoneDto } from './dto/update-timezone.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UsersService } from './users.service';
 
@@ -26,6 +27,15 @@ export class UsersController {
   @Patch('me')
   updateMe(@Req() req: { user: AppUser }, @Body() dto: UpdateProfileDto) {
     return this.users.updateMe(req.user, dto);
+  }
+
+  /** Utilisateur courant — fuseau IANA (auto-detect / Settings). */
+  @Patch('me/timezone')
+  updateMyTimezone(
+    @Req() req: { user: AppUser },
+    @Body() dto: UpdateTimezoneDto,
+  ) {
+    return this.users.updateMyTimezone(req.user, dto.timezone);
   }
 
   /**

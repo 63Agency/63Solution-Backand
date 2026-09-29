@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsNotEmpty, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 
 export class UpdateProfileDto {
   @IsString({ message: 'prénom requis' })
@@ -22,4 +22,11 @@ export class UpdateProfileDto {
   @IsString()
   @MaxLength(2048)
   avatarUrl?: string | null;
+
+  /** IANA timezone (ex. Asia/Ho_Chi_Minh). Validé côté service. */
+  @IsOptional()
+  @IsString({ message: 'timezone invalide' })
+  @MinLength(1, { message: 'timezone requis' })
+  @MaxLength(64, { message: 'timezone trop long' })
+  timezone?: string;
 }

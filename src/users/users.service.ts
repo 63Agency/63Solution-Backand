@@ -25,6 +25,7 @@ import {
 import { PresenceService } from '../realtime/presence.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { SupabaseService } from '../supabase/supabase.service';
+import { isValidIanaTimezone } from '../meetings/utils/availability-timezone';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
@@ -55,6 +56,17 @@ export class UsersService {
     return trimmed;
   }
 
+  /** Valide et normalise une timezone IANA (trim). */
+  private resolveTimezoneInput(raw: string): string {
+    const timezone = raw.trim();
+    if (!isValidIanaTimezone(timezone)) {
+      throw new BadRequestException({
+        message: 'timezone IANA invalide.',
+      });
+    }
+    return timezone;
+  }
+
   private toTeamItem(row: UserDbRow): TeamUserItem {
     return mapUserToTeamItem(row, {
       online: this.presence.isOnline(row.id),
@@ -78,6 +90,9 @@ export class UsersService {
     if (avatarUrl !== undefined) {
       patch.avatar_url = avatarUrl;
     }
+    if (dto.timezone !== undefined) {
+      patch.timezone = this.resolveTimezoneInput(dto.timezone);
+    }
 
     const { data, error } = await this.supabase
       .getClient()
@@ -96,6 +111,33 @@ export class UsersService {
     const mapped = mapUserToMe(data as UserDbRow);
     const teamItem = this.toTeamItem(data as UserDbRow);
     this.realtime.emitEmployeeUpdated(teamItem);
+
+    return {
+      user: mapped,
+      route: recommendedRoute(mapped.role),
+      permissions: getRolePermissions(mapped.role),
+    };
+  }
+
+  /** Utilisateur courant — timezone seule (auto-detect login / Settings). */
+  async updateMyTimezone(user: AppUser, timezoneRaw: string) {
+    const timezone = this.resolveTimezoneInput(timezoneRaw);
+    const { data, error } = await this.supabase
+      .getClient()
+      .from('users')
+      .update({ timezone })
+      .eq('id', user.id)
+      .select(USER_PUBLIC_COLUMNS)
+      .single();
+
+    if (error || !data) {
+      throw new NotFoundException({
+        message: error?.message ?? 'Mise à jour timezone impossible.',
+      });
+    }
+
+    const mapped = mapUserToMe(data as UserDbRow);
+    this.realtime.emitEmployeeUpdated(this.toTeamItem(data as UserDbRow));
 
     return {
       user: mapped,
@@ -244,6 +286,9 @@ export class UsersService {
     const avatarUrl = this.resolveAvatarUrl(dto.avatarUrl);
     if (avatarUrl !== undefined) {
       patch.avatar_url = avatarUrl;
+    }
+    if (dto.timezone !== undefined) {
+      patch.timezone = this.resolveTimezoneInput(dto.timezone);
     }
 
     if (Object.keys(patch).length === 0) {

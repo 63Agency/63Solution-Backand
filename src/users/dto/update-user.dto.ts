@@ -50,4 +50,11 @@ export class UpdateUserDto {
   @IsString()
   @MaxLength(2048)
   avatarUrl?: string | null;
+
+  /** IANA timezone (ex. Asia/Ho_Chi_Minh). Validé côté service. */
+  @IsOptional()
+  @IsString({ message: 'timezone invalide' })
+  @MinLength(1, { message: 'timezone requis' })
+  @MaxLength(64, { message: 'timezone trop long' })
+  timezone?: string;
 }

@@ -20,6 +20,7 @@ import {
   isFullAdmin,
   normalizeApiRole,
 } from '../common/utils/roles';
+import { resolveUserTimezone } from '../common/utils/user-response';
 import { SupabaseService } from '../supabase/supabase.service';
 import { PresenceService } from './presence.service';
 import {
@@ -207,7 +208,7 @@ export class RealtimeGateway
       .getClient()
       .from('users')
       .select(
-        'id, email, role, prenom, nom, telephone, ville, avatar_url',
+        'id, email, role, prenom, nom, telephone, ville, avatar_url, timezone',
       )
       .eq('id', payload.sub)
       .maybeSingle();
@@ -225,6 +226,7 @@ export class RealtimeGateway
       telephone: (data.telephone as string | null) ?? null,
       ville: (data.ville as string | null) ?? null,
       avatarUrl: (data.avatar_url as string | null)?.trim() || null,
+      timezone: resolveUserTimezone(data.timezone as string | null),
     };
   }
 }

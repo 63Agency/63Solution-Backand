@@ -4,7 +4,10 @@ import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { SupabaseService } from '../supabase/supabase.service';
 import { normalizeApiRole } from '../common/utils/roles';
-import { USER_PUBLIC_COLUMNS } from '../common/utils/user-response';
+import {
+  resolveUserTimezone,
+  USER_PUBLIC_COLUMNS,
+} from '../common/utils/user-response';
 import type { AppUser } from './types/app-user';
 
 @Injectable()
@@ -46,6 +49,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       telephone: (data.telephone as string | null) ?? null,
       ville: (data.ville as string | null) ?? null,
       avatarUrl: (data.avatar_url as string | null)?.trim() || null,
+      timezone: resolveUserTimezone(data.timezone as string | null),
     };
   }
 }
