@@ -20,6 +20,7 @@ import {
 import { AuthGuard } from '@nestjs/passport';
 import type { Response } from 'express';
 import type { AppUser } from '../auth/types/app-user';
+import { BroadcastListQueryDto } from './dto/broadcast-list-query.dto';
 import { CreateBroadcastDto } from './dto/create-broadcast.dto';
 import { SendWhatsappMessageDto } from './dto/send-whatsapp-message.dto';
 import { SendWhatsappTemplateDto } from './dto/send-whatsapp-template.dto';
@@ -68,10 +69,13 @@ export class WhatsappController {
 
   // ─── Broadcast async (template only) ───────────────────
 
-  /** Liste des jobs récents (tous les admin / admin_whatsapp). */
+  /** Liste des jobs récents (tous les admin / admin_whatsapp). ?limit=1..100 (défaut 50). */
   @Get('broadcast')
-  listBroadcastJobs(@Req() req: { user: AppUser }) {
-    return this.broadcastJobs.listJobs(req.user);
+  listBroadcastJobs(
+    @Req() req: { user: AppUser },
+    @Query() query: BroadcastListQueryDto,
+  ) {
+    return this.broadcastJobs.listJobs(req.user, { limit: query.limit });
   }
 
   /**
@@ -125,9 +129,14 @@ export class WhatsappController {
 
   // ─── Conversations ─────────────────────────────────────
 
+  @Get('unread-count')
+  unreadCount(@Req() req: { user: AppUser }) {
+    return this.whatsapp.unreadCount(req.user);
+  }
+
   @Get('conversations')
-  listConversations() {
-    return this.whatsapp.listConversations();
+  listConversations(@Req() req: { user: AppUser }) {
+    return this.whatsapp.listConversations(req.user);
   }
 
   @Get('conversations/:id')

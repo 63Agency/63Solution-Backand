@@ -6,6 +6,8 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import type { AppUser } from '../auth/types/app-user';
+import { assertCanAccessWhatsapp } from '../common/utils/access';
 import { CloudinaryService } from '../cloudinary/cloudinary.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { RealtimeService } from '../realtime/realtime.service';
@@ -399,7 +401,10 @@ export class WhatsappService {
     return this.meta.downloadMedia(mediaId);
   }
 
-  async listConversations(): Promise<WhatsappConversation[]> {
+  async listConversations(
+    user: AppUser,
+  ): Promise<WhatsappConversation[]> {
+    assertCanAccessWhatsapp(user);
     const { data, error } = await this.supabase
       .getClient()
       .from('whatsapp_conversations')
@@ -412,6 +417,32 @@ export class WhatsappService {
       throw new ConflictException({ message: error.message });
     }
     return (data ?? []).map((r) => mapConversation(r as ConversationRow));
+  }
+
+  /** Agrégat SQL pour dashboard (pas de scan côté client). */
+  async unreadCount(
+    user: AppUser,
+  ): Promise<{ totalUnread: number; conversationsWithUnread: number }> {
+    assertCanAccessWhatsapp(user);
+    const sql = `
+      SELECT
+        COALESCE(SUM(unread_count), 0)::int AS total_unread,
+        COUNT(*) FILTER (WHERE unread_count > 0)::int AS conversations_with_unread
+      FROM public.whatsapp_conversations
+    `;
+    const { rows, error } = await this.supabase.query<{
+      total_unread: number;
+      conversations_with_unread: number;
+    }>(sql);
+
+    if (error) {
+      throw new ConflictException({ message: error.message });
+    }
+    const row = rows[0];
+    return {
+      totalUnread: Number(row?.total_unread) || 0,
+      conversationsWithUnread: Number(row?.conversations_with_unread) || 0,
+    };
   }
 
   async getConversation(id: string): Promise<WhatsappConversation> {

@@ -24,6 +24,7 @@ import {
 import { CreateBlockedDayDto, ListBlockedDaysQueryDto } from './dto/blocked-day.dto';
 import { ListMeetingsQueryDto } from './dto/list-meetings-query.dto';
 import { SendReminderDto } from './dto/send-reminder.dto';
+import { StatsByDayQueryDto } from './dto/stats-by-day-query.dto';
 import { UpdateMeetingDto } from './dto/update-meeting.dto';
 import { MeetingsAvailabilitiesService } from './meetings-availabilities.service';
 import { MeetingsBlockedDaysService } from './meetings-blocked-days.service';
@@ -61,6 +62,15 @@ export class MeetingsController {
   @Get('stats')
   stats(@Req() req: { user: AppUser }) {
     return this.meetings.stats(req.user);
+  }
+
+  /** Série journalière (jour Casa) pour charts — max 180 j. */
+  @Get('stats/by-day')
+  statsByDay(
+    @Query() query: StatsByDayQueryDto,
+    @Req() req: { user: AppUser },
+  ) {
+    return this.meetings.statsByDay(req.user, query.from, query.to);
   }
 
   /** Liste users pour le picker « Visible pour l’équipe » (assignedUserIds). */

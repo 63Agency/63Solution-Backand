@@ -784,4 +784,25 @@ export class SupabaseService implements OnModuleInit {
   getClient(): PgCompatClient {
     return this.client;
   }
+
+  /**
+   * Raw SQL (agrégations GROUP BY / COUNT).
+   * Prefer getClient().from() for CRUD ; use query() for stats only.
+   */
+  async query<T = Record<string, unknown>>(
+    sql: string,
+    params: unknown[] = [],
+  ): Promise<{ rows: T[]; error: PgQueryError | null }> {
+    try {
+      const res = await this.pool.query(sql, params);
+      return { rows: (res.rows ?? []) as T[], error: null };
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      this.logger.warn(`raw query failed: ${message}`);
+      return {
+        rows: [],
+        error: { message, code: (e as { code?: string })?.code },
+      };
+    }
+  }
 }

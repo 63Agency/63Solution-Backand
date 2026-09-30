@@ -8,6 +8,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { DateTime } from 'luxon';
 import type { AppUser } from '../auth/types/app-user';
 import { assertCanAccessMeetings, assertFullAdmin } from '../common/utils/access';
 import {
@@ -44,9 +45,11 @@ import {
   DEFAULT_MEETING_DURATION,
   keepsReminderJobs,
   isPhoneCallMeetingTitle,
+  MEETING_STATUSES,
   normalizeMeetingDuration,
 } from './types/meeting.types';
 import {
+  CASABLANCA_TZ,
   casablancaDayBounds,
   casablancaWeekBounds,
 } from './utils/meeting-datetime';
@@ -65,6 +68,12 @@ type AssigneesBundle = {
   assignedUserIds: string[];
   assignees: MeetingAssignee[];
 };
+
+function emptyStatusBreakdown(): Record<MeetingStatus, number> {
+  return Object.fromEntries(
+    MEETING_STATUSES.map((s) => [s, 0]),
+  ) as Record<MeetingStatus, number>;
+}
 
 function clean(value: string | undefined | null): string {
   return (value ?? '').trim();
@@ -663,59 +672,215 @@ export class MeetingsService {
   async stats(user: AppUser) {
     assertCanAccessMeetings(user);
     const visibleIds = await this.visibilityMeetingIds(user);
+    const emptyByStatus = emptyStatusBreakdown();
     if (visibleIds && visibleIds.length === 0) {
-      return { today: 0, thisWeek: 0, pending: 0, noShow: 0 };
+      return {
+        today: 0,
+        thisWeek: 0,
+        pending: 0,
+        noShow: 0,
+        upcomingCount: 0,
+        byStatus: emptyByStatus,
+      };
     }
 
-    const sb = this.supabase.getClient();
     const { startIso: todayStart, endIso: todayEnd } = casablancaDayBounds();
     const { startIso: weekStart, endIso: weekEnd } = casablancaWeekBounds();
+    const nowIso = new Date().toISOString();
 
-    let todayQ = sb
-      .from('meetings')
-      .select('id', { count: 'exact', head: true })
-      .gte('meeting_date', todayStart)
-      .lt('meeting_date', todayEnd);
-    let weekQ = sb
-      .from('meetings')
-      .select('id', { count: 'exact', head: true })
-      .gte('meeting_date', weekStart)
-      .lt('meeting_date', weekEnd);
-    let pendingQ = sb
-      .from('meetings')
-      .select('id', { count: 'exact', head: true })
-      .eq('status', 'scheduled');
-    let noShowQ = sb
-      .from('meetings')
-      .select('id', { count: 'exact', head: true })
-      .eq('status', 'no_show');
+    const idFilter = visibleIds;
+    const scalarsSql = `
+      SELECT
+        COUNT(*) FILTER (
+          WHERE meeting_date >= $1::timestamptz AND meeting_date < $2::timestamptz
+        )::int AS today,
+        COUNT(*) FILTER (
+          WHERE meeting_date >= $3::timestamptz AND meeting_date < $4::timestamptz
+        )::int AS this_week,
+        COUNT(*) FILTER (WHERE status = 'scheduled')::int AS pending,
+        COUNT(*) FILTER (WHERE status = 'no_show')::int AS no_show,
+        COUNT(*) FILTER (
+          WHERE status = 'scheduled' AND meeting_date >= $5::timestamptz
+        )::int AS upcoming_count
+      FROM public.meetings
+      WHERE ($6::uuid[] IS NULL OR id = ANY($6::uuid[]))
+    `;
 
-    if (visibleIds) {
-      todayQ = todayQ.in('id', visibleIds);
-      weekQ = weekQ.in('id', visibleIds);
-      pendingQ = pendingQ.in('id', visibleIds);
-      noShowQ = noShowQ.in('id', visibleIds);
-    }
+    const byStatusSql = `
+      SELECT status::text AS status, COUNT(*)::int AS count
+      FROM public.meetings
+      WHERE ($1::uuid[] IS NULL OR id = ANY($1::uuid[]))
+      GROUP BY status
+    `;
 
-    const [todayRes, weekRes, pendingRes, noShowRes] = await Promise.all([
-      todayQ,
-      weekQ,
-      pendingQ,
-      noShowQ,
+    const [scalarsRes, byStatusRes] = await Promise.all([
+      this.supabase.query<{
+        today: number;
+        this_week: number;
+        pending: number;
+        no_show: number;
+        upcoming_count: number;
+      }>(scalarsSql, [
+        todayStart,
+        todayEnd,
+        weekStart,
+        weekEnd,
+        nowIso,
+        idFilter,
+      ]),
+      this.supabase.query<{ status: string; count: number }>(byStatusSql, [
+        idFilter,
+      ]),
     ]);
 
-    for (const res of [todayRes, weekRes, pendingRes, noShowRes]) {
-      if (res.error) {
-        throw new ConflictException({ message: res.error.message });
+    if (scalarsRes.error) {
+      throw new ConflictException({ message: scalarsRes.error.message });
+    }
+    if (byStatusRes.error) {
+      throw new ConflictException({ message: byStatusRes.error.message });
+    }
+
+    const row = scalarsRes.rows[0] ?? {
+      today: 0,
+      this_week: 0,
+      pending: 0,
+      no_show: 0,
+      upcoming_count: 0,
+    };
+
+    const byStatus = { ...emptyByStatus };
+    for (const r of byStatusRes.rows) {
+      if (r.status in byStatus) {
+        byStatus[r.status as MeetingStatus] = Number(r.count) || 0;
       }
     }
 
     return {
-      today: todayRes.count ?? 0,
-      thisWeek: weekRes.count ?? 0,
-      pending: pendingRes.count ?? 0,
-      noShow: noShowRes.count ?? 0,
+      today: Number(row.today) || 0,
+      thisWeek: Number(row.this_week) || 0,
+      pending: Number(row.pending) || 0,
+      noShow: Number(row.no_show) || 0,
+      upcomingCount: Number(row.upcoming_count) || 0,
+      byStatus,
     };
+  }
+
+  /**
+   * Série journalière (jour Africa/Casablanca) pour charts dashboard.
+   * from/to = YYYY-MM-DD inclus ; max 180 jours.
+   */
+  async statsByDay(
+    user: AppUser,
+    fromKey: string,
+    toKey: string,
+  ): Promise<{
+    from: string;
+    to: string;
+    items: Array<{
+      day: string;
+      count: number;
+      byStatus: Record<MeetingStatus, number>;
+    }>;
+  }> {
+    assertCanAccessMeetings(user);
+
+    const from = fromKey.trim().slice(0, 10);
+    const to = toKey.trim().slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+      throw new BadRequestException({
+        message: 'from et to doivent être YYYY-MM-DD',
+      });
+    }
+    if (from > to) {
+      throw new BadRequestException({
+        message: 'from doit être ≤ to',
+      });
+    }
+
+    const fromDt = DateTime.fromISO(from, { zone: CASABLANCA_TZ }).startOf(
+      'day',
+    );
+    const toExclusive = DateTime.fromISO(to, { zone: CASABLANCA_TZ })
+      .startOf('day')
+      .plus({ days: 1 });
+    if (!fromDt.isValid || !toExclusive.isValid) {
+      throw new BadRequestException({ message: 'from/to invalides' });
+    }
+
+    const daySpan = Math.floor(toExclusive.diff(fromDt, 'days').days);
+    if (daySpan > 180) {
+      throw new BadRequestException({
+        message: 'Période max 180 jours (from…to inclus).',
+      });
+    }
+
+    const visibleIds = await this.visibilityMeetingIds(user);
+    if (visibleIds && visibleIds.length === 0) {
+      return { from, to, items: [] };
+    }
+
+    const startIso = fromDt.toUTC().toISO()!;
+    const endIso = toExclusive.toUTC().toISO()!;
+
+    const sql = `
+      SELECT
+        (meeting_date AT TIME ZONE 'Africa/Casablanca')::date::text AS day,
+        status::text AS status,
+        COUNT(*)::int AS count
+      FROM public.meetings
+      WHERE meeting_date >= $1::timestamptz
+        AND meeting_date < $2::timestamptz
+        AND ($3::uuid[] IS NULL OR id = ANY($3::uuid[]))
+      GROUP BY 1, 2
+      ORDER BY 1 ASC
+    `;
+
+    const { rows, error } = await this.supabase.query<{
+      day: string;
+      status: string;
+      count: number;
+    }>(sql, [startIso, endIso, visibleIds]);
+
+    if (error) {
+      throw new ConflictException({ message: error.message });
+    }
+
+    const byDay = new Map<
+      string,
+      { count: number; byStatus: Record<MeetingStatus, number> }
+    >();
+
+    for (const r of rows) {
+      const day = String(r.day).slice(0, 10);
+      let bucket = byDay.get(day);
+      if (!bucket) {
+        bucket = { count: 0, byStatus: emptyStatusBreakdown() };
+        byDay.set(day, bucket);
+      }
+      const n = Number(r.count) || 0;
+      bucket.count += n;
+      if (r.status in bucket.byStatus) {
+        bucket.byStatus[r.status as MeetingStatus] += n;
+      }
+    }
+
+    // Fill every calendar day in range (zeros) for stable charts.
+    const items: Array<{
+      day: string;
+      count: number;
+      byStatus: Record<MeetingStatus, number>;
+    }> = [];
+    for (let d = fromDt; d < toExclusive; d = d.plus({ days: 1 })) {
+      const key = d.toISODate()!;
+      const bucket = byDay.get(key);
+      items.push({
+        day: key,
+        count: bucket?.count ?? 0,
+        byStatus: bucket?.byStatus ?? emptyStatusBreakdown(),
+      });
+    }
+
+    return { from, to, items };
   }
 
   async create(dto: CreateMeetingDto, user: AppUser) {

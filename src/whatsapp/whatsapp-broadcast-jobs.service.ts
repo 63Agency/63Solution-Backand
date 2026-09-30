@@ -297,14 +297,18 @@ export class WhatsappBroadcastJobsService implements OnModuleInit {
     return { jobId, total: stored.length, status: 'pending' };
   }
 
-  async listJobs(user: AppUser): Promise<{ items: BroadcastJobListItem[] }> {
+  async listJobs(
+    user: AppUser,
+    opts: { limit?: number } = {},
+  ): Promise<{ items: BroadcastJobListItem[] }> {
     assertCanAccessWhatsapp(user);
+    const limit = Math.min(Math.max(opts.limit ?? 50, 1), 100);
     const { data, error } = await this.supabase
       .getClient()
       .from('whatsapp_broadcast_jobs')
       .select(JOB_SELECT)
       .order('created_at', { ascending: false })
-      .limit(50);
+      .limit(limit);
 
     if (error) throw new ConflictException({ message: error.message });
     return {
