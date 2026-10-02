@@ -87,9 +87,10 @@ export class UpsertDevisDto {
   @Max(100, { message: 'tvaTaux doit être entre 0 et 100' })
   tvaTaux: number;
 
-  @IsString({ message: 'mentionTva requise' })
+  @IsOptional()
+  @IsString({ message: 'mentionTva invalide' })
   @MaxLength(2000, { message: 'mentionTva trop longue' })
-  mentionTva: string;
+  mentionTva?: string;
 
   @IsString({ message: 'paiementMode requis' })
   @MaxLength(200, { message: 'paiementMode trop long' })
