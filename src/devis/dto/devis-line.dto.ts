@@ -17,8 +17,8 @@ export class DevisLineDto {
   description: string;
 
   @Type(() => Number)
-  @IsInt({ message: 'quantite doit être un entier >= 1' })
-  @Min(1, { message: 'quantite doit être >= 1' })
+  @IsInt({ message: 'quantite doit être un entier >= 0' })
+  @Min(0, { message: 'quantite doit être >= 0' })
   quantite: number;
 
   @Type(() => Number)
