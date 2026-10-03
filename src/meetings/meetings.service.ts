@@ -10,11 +10,7 @@ import {
 } from '@nestjs/common';
 import { DateTime } from 'luxon';
 import type { AppUser } from '../auth/types/app-user';
-import {
-  assertCanAccessMeetings,
-  assertCanAccessWhatsapp,
-  assertFullAdmin,
-} from '../common/utils/access';
+import { assertCanAccessMeetings, assertFullAdmin } from '../common/utils/access';
 import {
   canAssignMeetingUsers,
   isFixedMeeting,
@@ -946,7 +942,7 @@ export class MeetingsService {
   /**
    * Agrégats setter / closer par membre (suivi + base commissions).
    * Période = jours Casa inclus ; défaut = mois courant ; max 366 j.
-   * Accès : admin + admin_whatsapp (pas fixed_meeting).
+   * Accès : full admin only (perf équipe / base commissions).
    * « done » = status `done` (meeting réussi / conclu).
    */
   async statsByMember(
@@ -964,7 +960,7 @@ export class MeetingsService {
       closerSuccessRate: number;
     }>;
   }> {
-    assertCanAccessWhatsapp(user);
+    assertFullAdmin(user);
 
     const { from, to, startIso, endIso } = this.resolveStatsPeriod(
       fromKey,

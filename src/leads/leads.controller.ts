@@ -1,5 +1,4 @@
 import {
-  Body,
   Controller,
   DefaultValuePipe,
   Get,
@@ -15,6 +14,7 @@ import {
 import { AuthGuard } from '@nestjs/passport';
 import type { AppUser } from '../auth/types/app-user';
 import { ClickupService } from '../clickup/clickup.service';
+import { LeadsStatsOverviewQueryDto } from './dto/leads-stats-overview-query.dto';
 
 @Controller('leads')
 @UseGuards(AuthGuard('jwt'))
@@ -44,6 +44,19 @@ export class LeadsController {
     return this.clickup.getLeadsMeta(req.user);
   }
 
+  /**
+   * Agrégats SQL dashboard (par statut / liste / jour Casa).
+   * Accès : admin + admin_whatsapp. Période optionnelle.
+   */
+  @Get('stats/overview')
+  statsOverview(
+    @Req() req: { user: AppUser },
+    @Query() query: LeadsStatsOverviewQueryDto,
+  ) {
+    return this.clickup.getLeadsStatsOverview(req.user, query.from, query.to);
+  }
+
+  /** Rétro-compat : { total, byStatus: Record }. Délègue au SQL overview. */
   @Get('stats')
   stats(@Req() req: { user: AppUser }) {
     return this.clickup.getLeadsStats(req.user);

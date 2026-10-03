@@ -5,6 +5,7 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
+import { AdminModule } from './admin/admin.module';
 import { AuthModule } from './auth/auth.module';
 import { ClickupModule } from './clickup/clickup.module';
 import { CloudinaryModule } from './cloudinary/cloudinary.module';
@@ -33,6 +34,7 @@ import { PublicModule } from './public/public.module';
     ThrottlerModule.forRoot([{ ttl: 60_000, limit: 120 }]),
     SupabaseModule,
     AuthModule,
+    AdminModule,
     RealtimeModule,
     ClickupModule,
     CloudinaryModule,

@@ -76,7 +76,7 @@ export class MeetingsController {
 
   /**
    * Stats setter/closer par membre (base commissions).
-   * Accès : admin + admin_whatsapp. Période Casa optionnelle (défaut = mois courant).
+   * Accès : full admin only. Période Casa optionnelle (défaut = mois courant).
    */
   @Get('stats/by-member')
   statsByMember(

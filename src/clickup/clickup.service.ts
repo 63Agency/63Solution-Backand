@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   Logger,
@@ -6,8 +7,10 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { DateTime } from 'luxon';
 import type { AppUser } from '../auth/types/app-user';
 import { assertCanAccessLeads } from '../common/utils/access';
+import { CASABLANCA_TZ } from '../meetings/utils/meeting-datetime';
 import { RealtimeService } from '../realtime/realtime.service';
 import { SupabaseService } from '../supabase/supabase.service';
 import type { ClickUpLead } from './types/clickup.types';
@@ -592,30 +595,239 @@ export class ClickupService {
     };
   }
 
+  /**
+   * Rétro-compat : total + byStatus (objet).
+   * Agrégation SQL (plus de scan Node).
+   */
   async getLeadsStats(user: AppUser): Promise<{
     total: number;
     byStatus: Record<string, number>;
   }> {
     assertCanAccessLeads(user);
 
-    const { data, error } = await this.supabase
-      .getClient()
-      .from('clickup_leads')
-      .select('status');
+    const overview = await this.getLeadsStatsOverview(user);
+    const byStatus: Record<string, number> = {};
+    for (const row of overview.byStatus) {
+      byStatus[row.status] = row.count;
+    }
+    return { total: overview.total, byStatus };
+  }
 
-    if (error) {
-      throw new ConflictException({ message: error.message });
+  /**
+   * Dashboard leads — agrégats SQL.
+   * Sans from/to : scope global ; createdInPeriod=0 ; byDay=[].
+   * Avec from/to (jours Casa inclus) : total/byStatus/byList/byDay filtrés
+   * sur created_at dans la période ; createdInPeriod = total.
+   */
+  async getLeadsStatsOverview(
+    user: AppUser,
+    fromKey?: string,
+    toKey?: string,
+  ): Promise<{
+    from: string | null;
+    to: string | null;
+    total: number;
+    byStatus: Array<{ status: string; count: number }>;
+    byList: Array<{ listId: string; listName: string; count: number }>;
+    createdInPeriod: number;
+    byDay: Array<{ day: string; count: number }>;
+  }> {
+    assertCanAccessLeads(user);
+
+    const period = this.resolveOptionalCasaPeriod(fromKey, toKey, 366);
+    const startIso = period?.startIso ?? null;
+    const endIso = period?.endIso ?? null;
+
+    const totalSql = `
+      SELECT COUNT(*)::int AS total
+      FROM public.clickup_leads
+      WHERE ($1::timestamptz IS NULL OR created_at >= $1::timestamptz)
+        AND ($2::timestamptz IS NULL OR created_at < $2::timestamptz)
+    `;
+
+    const byStatusSql = `
+      SELECT
+        COALESCE(NULLIF(TRIM(status), ''), 'Sans statut') AS status,
+        COUNT(*)::int AS count
+      FROM public.clickup_leads
+      WHERE ($1::timestamptz IS NULL OR created_at >= $1::timestamptz)
+        AND ($2::timestamptz IS NULL OR created_at < $2::timestamptz)
+      GROUP BY 1
+      ORDER BY count DESC, status ASC
+    `;
+
+    const byListSql = `
+      SELECT
+        COALESCE(NULLIF(TRIM(list_id), ''), '_none') AS list_id,
+        COALESCE(
+          NULLIF(TRIM(MAX(list_name)), ''),
+          NULLIF(TRIM(list_id), ''),
+          '_none'
+        ) AS list_name,
+        COUNT(*)::int AS count
+      FROM public.clickup_leads
+      WHERE ($1::timestamptz IS NULL OR created_at >= $1::timestamptz)
+        AND ($2::timestamptz IS NULL OR created_at < $2::timestamptz)
+      GROUP BY COALESCE(NULLIF(TRIM(list_id), ''), '_none')
+      ORDER BY count DESC, list_name ASC
+    `;
+
+    const [totalRes, statusRes, listRes] = await Promise.all([
+      this.supabase.query<{ total: number }>(totalSql, [startIso, endIso]),
+      this.supabase.query<{ status: string; count: number }>(byStatusSql, [
+        startIso,
+        endIso,
+      ]),
+      this.supabase.query<{
+        list_id: string;
+        list_name: string;
+        count: number;
+      }>(byListSql, [startIso, endIso]),
+    ]);
+
+    if (totalRes.error) {
+      throw new ConflictException({ message: totalRes.error.message });
+    }
+    if (statusRes.error) {
+      throw new ConflictException({ message: statusRes.error.message });
+    }
+    if (listRes.error) {
+      throw new ConflictException({ message: listRes.error.message });
     }
 
-    const byStatus: Record<string, number> = {};
-    for (const row of data ?? []) {
-      const status = row.status ? String(row.status).trim() : 'Sans statut';
-      byStatus[status] = (byStatus[status] ?? 0) + 1;
+    const total = Number(totalRes.rows[0]?.total) || 0;
+
+    const byStatus = statusRes.rows.map((r) => ({
+      status: String(r.status),
+      count: Number(r.count) || 0,
+    }));
+
+    const byList = listRes.rows.map((r) => {
+      const listId = String(r.list_id);
+      const listName = String(r.list_name || listId);
+      return {
+        listId: listId === '_none' ? '' : listId,
+        listName: listId === '_none' ? listName || 'Sans liste' : listName,
+        count: Number(r.count) || 0,
+      };
+    });
+
+    if (!period) {
+      return {
+        from: null,
+        to: null,
+        total,
+        byStatus,
+        byList,
+        createdInPeriod: 0,
+        byDay: [],
+      };
+    }
+
+    const byDaySql = `
+      SELECT
+        (created_at AT TIME ZONE 'Africa/Casablanca')::date::text AS day,
+        COUNT(*)::int AS count
+      FROM public.clickup_leads
+      WHERE created_at >= $1::timestamptz
+        AND created_at < $2::timestamptz
+      GROUP BY 1
+      ORDER BY 1 ASC
+    `;
+
+    const byDayRes = await this.supabase.query<{ day: string; count: number }>(
+      byDaySql,
+      [period.startIso, period.endIso],
+    );
+    if (byDayRes.error) {
+      throw new ConflictException({ message: byDayRes.error.message });
+    }
+
+    const countsByDay = new Map<string, number>();
+    for (const r of byDayRes.rows) {
+      countsByDay.set(String(r.day).slice(0, 10), Number(r.count) || 0);
+    }
+
+    const byDay: Array<{ day: string; count: number }> = [];
+    for (
+      let d = period.fromDt;
+      d < period.toExclusive;
+      d = d.plus({ days: 1 })
+    ) {
+      const key = d.toISODate()!;
+      byDay.push({ day: key, count: countsByDay.get(key) ?? 0 });
     }
 
     return {
-      total: data?.length ?? 0,
+      from: period.from,
+      to: period.to,
+      total,
       byStatus,
+      byList,
+      createdInPeriod: total,
+      byDay,
+    };
+  }
+
+  /**
+   * Optional Casa period. Both from+to required together; omitted = no filter.
+   */
+  private resolveOptionalCasaPeriod(
+    fromKey: string | undefined,
+    toKey: string | undefined,
+    maxDays: number,
+  ): {
+    from: string;
+    to: string;
+    startIso: string;
+    endIso: string;
+    fromDt: DateTime;
+    toExclusive: DateTime;
+  } | null {
+    const hasFrom = fromKey != null && String(fromKey).trim() !== '';
+    const hasTo = toKey != null && String(toKey).trim() !== '';
+    if (!hasFrom && !hasTo) return null;
+    if (hasFrom !== hasTo) {
+      throw new BadRequestException({
+        message: 'from et to doivent être fournis ensemble (YYYY-MM-DD).',
+      });
+    }
+
+    const from = String(fromKey).trim().slice(0, 10);
+    const to = String(toKey).trim().slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+      throw new BadRequestException({
+        message: 'from et to doivent être YYYY-MM-DD',
+      });
+    }
+    if (from > to) {
+      throw new BadRequestException({ message: 'from doit être ≤ to' });
+    }
+
+    const fromDt = DateTime.fromISO(from, { zone: CASABLANCA_TZ }).startOf(
+      'day',
+    );
+    const toExclusive = DateTime.fromISO(to, { zone: CASABLANCA_TZ })
+      .startOf('day')
+      .plus({ days: 1 });
+    if (!fromDt.isValid || !toExclusive.isValid) {
+      throw new BadRequestException({ message: 'from/to invalides' });
+    }
+
+    const daySpan = Math.floor(toExclusive.diff(fromDt, 'days').days);
+    if (daySpan > maxDays) {
+      throw new BadRequestException({
+        message: `Période max ${maxDays} jours (from…to inclus).`,
+      });
+    }
+
+    return {
+      from,
+      to,
+      startIso: fromDt.toUTC().toISO()!,
+      endIso: toExclusive.toUTC().toISO()!,
+      fromDt,
+      toExclusive,
     };
   }
 }
