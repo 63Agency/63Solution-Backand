@@ -11,6 +11,7 @@ import {
   IsUUID,
   MaxLength,
   MinLength,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
 import {
@@ -98,12 +99,27 @@ export class UpdateMeetingDto {
   /**
    * Remplace toute la liste assignees (staff). Absent = inchangé.
    * Le créateur reste toujours inclus.
+   * Distinct de setterId / closerId (rôles commission).
    */
   @IsOptional()
   @IsArray({ message: 'assignedUserIds doit être un tableau' })
   @ArrayMaxSize(100, { message: 'assignedUserIds max 100' })
   @IsUUID('4', { each: true, message: 'assignedUserIds contient un id invalide' })
   assignedUserIds?: string[];
+
+  /** Qui a pris le RDV. null = effacer. Absent = inchangé. */
+  @IsOptional()
+  @Transform(({ value }) => (value === '' ? null : value))
+  @ValidateIf((_, v) => v !== null && v !== undefined)
+  @IsUUID('4', { message: 'setterId invalide' })
+  setterId?: string | null;
+
+  /** Tag closer. null = effacer. Absent = inchangé. */
+  @IsOptional()
+  @Transform(({ value }) => (value === '' ? null : value))
+  @ValidateIf((_, v) => v !== null && v !== undefined)
+  @IsUUID('4', { message: 'closerId invalide' })
+  closerId?: string | null;
 
   @IsOptional()
   @ValidateNested()

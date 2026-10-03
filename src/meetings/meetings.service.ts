@@ -69,6 +69,10 @@ type AssigneesBundle = {
   assignees: MeetingAssignee[];
 };
 
+function stubAssignee(userId: string): MeetingAssignee {
+  return { userId, prenom: '', nom: '', email: '', role: '' };
+}
+
 function emptyStatusBreakdown(): Record<MeetingStatus, number> {
   return Object.fromEntries(
     MEETING_STATUSES.map((s) => [s, 0]),
@@ -93,6 +97,11 @@ function mapMeetingBase(
   jobs: MeetingReminderRow[] = [],
   members: MeetingMember[] = [],
   assignees: AssigneesBundle = { assignedUserIds: [], assignees: [] },
+  staff: {
+    createdByUser: MeetingAssignee | null;
+    setter: MeetingAssignee | null;
+    closer: MeetingAssignee | null;
+  } = { createdByUser: null, setter: null, closer: null },
 ): Meeting {
   const reminders = normalizeRemindersConfig(
     (r.reminders as MeetingRemindersConfig | null) ?? undefined,
@@ -102,6 +111,10 @@ function mapMeetingBase(
       ? buildRemindersStatusFromJobs(jobs, reminders)
       : emptyRemindersStatus();
   const legacy = legacyFlagsFromStatus(remindersStatus);
+
+  const createdById = r.created_by ? String(r.created_by) : null;
+  const setterId = r.setter_id ? String(r.setter_id) : null;
+  const closerId = r.closer_id ? String(r.closer_id) : null;
 
   return {
     id: String(r.id),
@@ -115,7 +128,12 @@ function mapMeetingBase(
     members,
     assignedUserIds: assignees.assignedUserIds,
     assignees: assignees.assignees,
-    createdBy: r.created_by ? String(r.created_by) : null,
+    createdBy: createdById,
+    createdByUser: staff.createdByUser,
+    setterId,
+    setter: staff.setter,
+    closerId,
+    closer: staff.closer,
     status: String(r.status ?? 'scheduled') as MeetingStatus,
     reminderWhatsappSent:
       legacy.reminderWhatsappSent || Boolean(r.reminder_whatsapp_sent),
@@ -137,7 +155,7 @@ function mapMeetingBase(
 }
 
 const SELECT_COLS =
-  'id, lead_id, title, meeting_date, duration_minutes, contact_name, contact_phone, contact_email, status, reminder_whatsapp_sent, reminder_email_sent, reminders, manual_reminder_sent_at, manual_reminder_whatsapp_sent, manual_reminder_email_sent, notes, meet_link, meet_space, created_by, created_at, updated_at';
+  'id, lead_id, title, meeting_date, duration_minutes, contact_name, contact_phone, contact_email, status, reminder_whatsapp_sent, reminder_email_sent, reminders, manual_reminder_sent_at, manual_reminder_whatsapp_sent, manual_reminder_email_sent, notes, meet_link, meet_space, created_by, setter_id, closer_id, created_at, updated_at';
 
 @Injectable()
 export class MeetingsService {
@@ -153,29 +171,57 @@ export class MeetingsService {
   ) {}
 
   private async enrich(row: MeetingRow): Promise<Meeting> {
-    const [jobs, members, assignees] = await Promise.all([
-      this.reminderJobs.listJobsForMeeting(row.id),
-      this.loadMembersForMeeting(row.id),
-      this.loadAssigneesForMeeting(row.id),
-    ]);
-    return mapMeetingBase(row, jobs, members, assignees);
+    const [meeting] = await this.enrichMany([row]);
+    return meeting!;
   }
 
   private async enrichMany(rows: MeetingRow[]): Promise<Meeting[]> {
+    if (rows.length === 0) return [];
     const ids = rows.map((r) => r.id);
-    const [jobsMap, membersMap, assigneesMap] = await Promise.all([
+    const [jobsMap, membersMap, assigneeRows] = await Promise.all([
       this.reminderJobs.listJobsForMeetings(ids),
       this.loadMembersForMeetings(ids),
-      this.loadAssigneesForMeetings(ids),
+      this.loadAssigneeRows(ids),
     ]);
-    return rows.map((r) =>
-      mapMeetingBase(
+
+    const userIds = new Set<string>();
+    for (const r of rows) {
+      if (r.created_by) userIds.add(String(r.created_by));
+      if (r.setter_id) userIds.add(String(r.setter_id));
+      if (r.closer_id) userIds.add(String(r.closer_id));
+    }
+    for (const row of assigneeRows) {
+      userIds.add(String(row.user_id));
+    }
+    const usersById = await this.loadUsersByIds([...userIds]);
+    const assigneesMap = this.buildAssigneesBundles(
+      ids,
+      assigneeRows,
+      usersById,
+    );
+
+    return rows.map((r) => {
+      const createdById = r.created_by ? String(r.created_by) : null;
+      const setterId = r.setter_id ? String(r.setter_id) : null;
+      const closerId = r.closer_id ? String(r.closer_id) : null;
+      return mapMeetingBase(
         r,
         jobsMap.get(r.id) ?? [],
         membersMap.get(r.id) ?? [],
         assigneesMap.get(r.id) ?? { assignedUserIds: [], assignees: [] },
-      ),
-    );
+        {
+          createdByUser: createdById
+            ? usersById.get(createdById) ?? stubAssignee(createdById)
+            : null,
+          setter: setterId
+            ? usersById.get(setterId) ?? stubAssignee(setterId)
+            : null,
+          closer: closerId
+            ? usersById.get(closerId) ?? stubAssignee(closerId)
+            : null,
+        },
+      );
+    });
   }
 
   private async loadMembersForMeeting(
@@ -220,15 +266,10 @@ export class MeetingsService {
     return map.get(meetingId) ?? { assignedUserIds: [], assignees: [] };
   }
 
-  private async loadAssigneesForMeetings(
+  private async loadAssigneeRows(
     meetingIds: string[],
-  ): Promise<Map<string, AssigneesBundle>> {
-    const map = new Map<string, AssigneesBundle>();
-    for (const id of meetingIds) {
-      map.set(id, { assignedUserIds: [], assignees: [] });
-    }
-    if (meetingIds.length === 0) return map;
-
+  ): Promise<MeetingAssigneeRow[]> {
+    if (meetingIds.length === 0) return [];
     const { data, error } = await this.supabase
       .getClient()
       .from('meeting_assignees')
@@ -237,14 +278,21 @@ export class MeetingsService {
       .order('created_at', { ascending: true });
 
     if (error) {
-      this.logger.warn(`loadAssigneesForMeetings failed: ${error.message}`);
-      return map;
+      this.logger.warn(`loadAssigneeRows failed: ${error.message}`);
+      return [];
     }
+    return (data ?? []) as MeetingAssigneeRow[];
+  }
 
-    const rows = (data ?? []) as MeetingAssigneeRow[];
-    const userIds = [...new Set(rows.map((r) => String(r.user_id)))];
-    const usersById = await this.loadUsersByIds(userIds);
-
+  private buildAssigneesBundles(
+    meetingIds: string[],
+    rows: MeetingAssigneeRow[],
+    usersById: Map<string, MeetingAssignee>,
+  ): Map<string, AssigneesBundle> {
+    const map = new Map<string, AssigneesBundle>();
+    for (const id of meetingIds) {
+      map.set(id, { assignedUserIds: [], assignees: [] });
+    }
     for (const row of rows) {
       const mid = String(row.meeting_id);
       const uid = String(row.user_id);
@@ -253,27 +301,19 @@ export class MeetingsService {
         assignees: [],
       };
       bundle.assignedUserIds.push(uid);
-      const u = usersById.get(uid);
-      if (u) {
-        bundle.assignees.push({
-          userId: uid,
-          prenom: u.prenom,
-          nom: u.nom,
-          email: u.email,
-          role: u.role,
-        });
-      } else {
-        bundle.assignees.push({
-          userId: uid,
-          prenom: '',
-          nom: '',
-          email: '',
-          role: '',
-        });
-      }
+      bundle.assignees.push(usersById.get(uid) ?? stubAssignee(uid));
       map.set(mid, bundle);
     }
     return map;
+  }
+
+  private async loadAssigneesForMeetings(
+    meetingIds: string[],
+  ): Promise<Map<string, AssigneesBundle>> {
+    const rows = await this.loadAssigneeRows(meetingIds);
+    const userIds = [...new Set(rows.map((r) => String(r.user_id)))];
+    const usersById = await this.loadUsersByIds(userIds);
+    return this.buildAssigneesBundles(meetingIds, rows, usersById);
   }
 
   private async loadUsersByIds(
@@ -357,26 +397,42 @@ export class MeetingsService {
     return [...set];
   }
 
-  private async assertUsersExist(userIds: string[]): Promise<void> {
+  private async assertUsersExist(
+    userIds: string[],
+    fieldLabel = 'assignedUserIds',
+  ): Promise<void> {
     if (userIds.length === 0) return;
+    const unique = [...new Set(userIds)];
     const { data, error } = await this.supabase
       .getClient()
       .from('users')
       .select('id')
-      .in('id', userIds);
+      .in('id', unique);
 
     if (error) {
       throw new ConflictException({
-        message: error.message ?? 'Vérification des assignees impossible',
+        message: error.message ?? 'Vérification des utilisateurs impossible',
       });
     }
     const found = new Set((data ?? []).map((r) => String(r.id)));
-    const missing = userIds.filter((id) => !found.has(id));
+    const missing = unique.filter((id) => !found.has(id));
     if (missing.length > 0) {
       throw new BadRequestException({
-        message: `assignedUserIds inconnu : ${missing.join(', ')}`,
+        message: `${fieldLabel} inconnu : ${missing.join(', ')}`,
       });
     }
+  }
+
+  /** Validate optional commission-role user ids (setter / closer). */
+  private async assertOptionalStaffIds(ids: {
+    setterId?: string | null;
+    closerId?: string | null;
+  }): Promise<void> {
+    const toCheck: string[] = [];
+    if (ids.setterId) toCheck.push(ids.setterId);
+    if (ids.closerId) toCheck.push(ids.closerId);
+    if (toCheck.length === 0) return;
+    await this.assertUsersExist(toCheck, 'setterId/closerId');
   }
 
   /** Replace the full members list for a meeting (delete + insert). */
@@ -918,6 +974,10 @@ export class MeetingsService {
     );
     await this.assertUsersExist(assignedUserIds);
 
+    const setterId = dto.setterId?.trim() || null;
+    const closerId = dto.closerId?.trim() || null;
+    await this.assertOptionalStaffIds({ setterId, closerId });
+
     const durationMinutes = normalizeMeetingDuration(
       dto.durationMinutes ?? DEFAULT_MEETING_DURATION,
     );
@@ -957,6 +1017,8 @@ export class MeetingsService {
         manual_reminder_whatsapp_sent: false,
         manual_reminder_email_sent: false,
         created_by: user.id,
+        setter_id: setterId,
+        closer_id: closerId,
         created_at: now,
         updated_at: now,
       })
@@ -971,17 +1033,12 @@ export class MeetingsService {
 
     const meetingId = String((data as MeetingRow).id);
     const members = this.normalizeMembersInput(dto.members);
-    const [savedMembers, savedAssignees] = await Promise.all([
+    await Promise.all([
       this.replaceMembers(meetingId, members),
       this.replaceAssignees(meetingId, assignedUserIds),
     ]);
 
-    let meeting = mapMeetingBase(
-      data as MeetingRow,
-      [],
-      savedMembers,
-      savedAssignees,
-    );
+    let meeting = await this.enrich(data as MeetingRow);
 
     // 1) Jobs auto 2d/24h/2h uniquement — aucun envoi immédiat ici.
     if (keepsReminderJobs(meeting.status)) {
@@ -997,7 +1054,7 @@ export class MeetingsService {
     }
 
     this.logger.log(
-      `Meeting created id=${meeting.id} meet=${meet?.meetLink ? 'yes' : 'no'} members=${savedMembers.length} assignees=${assignedUserIds.length} notifyOnCreate=${dto.notifyOnCreate === true}`,
+      `Meeting created id=${meeting.id} meet=${meet?.meetLink ? 'yes' : 'no'} members=${meeting.members.length} assignees=${assignedUserIds.length} notifyOnCreate=${dto.notifyOnCreate === true}`,
     );
 
     // 2) Seul point d’envoi de la confirmation immédiate (WA + email).
@@ -1270,6 +1327,22 @@ export class MeetingsService {
         user,
       );
       await this.assertUsersExist(assigneesToSave);
+    }
+
+    if (dto.setterId !== undefined) {
+      const nextSetter = dto.setterId === null ? null : dto.setterId.trim();
+      if (nextSetter) {
+        await this.assertOptionalStaffIds({ setterId: nextSetter });
+      }
+      patch.setter_id = nextSetter;
+    }
+
+    if (dto.closerId !== undefined) {
+      const nextCloser = dto.closerId === null ? null : dto.closerId.trim();
+      if (nextCloser) {
+        await this.assertOptionalStaffIds({ closerId: nextCloser });
+      }
+      patch.closer_id = nextCloser;
     }
 
     const availabilityChanged =

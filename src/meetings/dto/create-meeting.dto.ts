@@ -96,12 +96,25 @@ export class CreateMeetingDto {
   /**
    * Users internes (staff) autorisés à voir ce RDV.
    * Distinct de `members` (leads clients). Le créateur est toujours inclus.
+   * Distinct de setterId / closerId (rôles commission).
    */
   @IsOptional()
   @IsArray({ message: 'assignedUserIds doit être un tableau' })
   @ArrayMaxSize(100, { message: 'assignedUserIds max 100' })
   @IsUUID('4', { each: true, message: 'assignedUserIds contient un id invalide' })
   assignedUserIds?: string[];
+
+  /** Qui a pris le RDV (premier call). Optionnel. */
+  @IsOptional()
+  @Transform(({ value }) => emptyToUndefined(value))
+  @IsUUID('4', { message: 'setterId invalide' })
+  setterId?: string;
+
+  /** Tag closer — qui conclut. Optionnel. */
+  @IsOptional()
+  @Transform(({ value }) => emptyToUndefined(value))
+  @IsUUID('4', { message: 'closerId invalide' })
+  closerId?: string;
 
   @IsOptional()
   @ValidateNested()

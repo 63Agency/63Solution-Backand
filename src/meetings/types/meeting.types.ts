@@ -154,6 +154,8 @@ export type MeetingRow = {
   meet_link: string | null;
   meet_space: string | null;
   created_by?: string | null;
+  setter_id?: string | null;
+  closer_id?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -186,7 +188,21 @@ export type Meeting = {
   assignedUserIds: string[];
   /** Détail staff assigné (≠ members). */
   assignees: MeetingAssignee[];
+  /**
+   * UUID du créateur (rétro-compat front).
+   * Détail enrichi → `createdByUser`.
+   */
   createdBy: string | null;
+  /** Créateur enrichi (même shape que assignees). */
+  createdByUser: MeetingAssignee | null;
+  /** UUID setter (commission). */
+  setterId: string | null;
+  /** Setter enrichi. */
+  setter: MeetingAssignee | null;
+  /** UUID closer / tag closer (commission). */
+  closerId: string | null;
+  /** Closer enrichi. */
+  closer: MeetingAssignee | null;
   status: MeetingStatus;
   reminderWhatsappSent: boolean;
   reminderEmailSent: boolean;
