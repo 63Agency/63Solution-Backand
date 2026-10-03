@@ -25,6 +25,7 @@ import { CreateBlockedDayDto, ListBlockedDaysQueryDto } from './dto/blocked-day.
 import { ListMeetingsQueryDto } from './dto/list-meetings-query.dto';
 import { SendReminderDto } from './dto/send-reminder.dto';
 import { StatsByDayQueryDto } from './dto/stats-by-day-query.dto';
+import { StatsByMemberQueryDto } from './dto/stats-by-member-query.dto';
 import { UpdateMeetingDto } from './dto/update-meeting.dto';
 import { MeetingsAvailabilitiesService } from './meetings-availabilities.service';
 import { MeetingsBlockedDaysService } from './meetings-blocked-days.service';
@@ -71,6 +72,18 @@ export class MeetingsController {
     @Req() req: { user: AppUser },
   ) {
     return this.meetings.statsByDay(req.user, query.from, query.to);
+  }
+
+  /**
+   * Stats setter/closer par membre (base commissions).
+   * Accès : admin + admin_whatsapp. Période Casa optionnelle (défaut = mois courant).
+   */
+  @Get('stats/by-member')
+  statsByMember(
+    @Query() query: StatsByMemberQueryDto,
+    @Req() req: { user: AppUser },
+  ) {
+    return this.meetings.statsByMember(req.user, query.from, query.to);
   }
 
   /** Liste users pour le picker « Visible pour l’équipe » (assignedUserIds). */

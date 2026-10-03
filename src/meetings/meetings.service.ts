@@ -10,7 +10,11 @@ import {
 } from '@nestjs/common';
 import { DateTime } from 'luxon';
 import type { AppUser } from '../auth/types/app-user';
-import { assertCanAccessMeetings, assertFullAdmin } from '../common/utils/access';
+import {
+  assertCanAccessMeetings,
+  assertCanAccessWhatsapp,
+  assertFullAdmin,
+} from '../common/utils/access';
 import {
   canAssignMeetingUsers,
   isFixedMeeting,
@@ -937,6 +941,205 @@ export class MeetingsService {
     }
 
     return { from, to, items };
+  }
+
+  /**
+   * Agrégats setter / closer par membre (suivi + base commissions).
+   * Période = jours Casa inclus ; défaut = mois courant ; max 366 j.
+   * Accès : admin + admin_whatsapp (pas fixed_meeting).
+   * « done » = status `done` (meeting réussi / conclu).
+   */
+  async statsByMember(
+    user: AppUser,
+    fromKey?: string,
+    toKey?: string,
+  ): Promise<{
+    from: string;
+    to: string;
+    totals: { totalMeetings: number; totalDone: number };
+    items: Array<{
+      user: MeetingAssignee;
+      asSetter: { total: number; done: number };
+      asCloser: { total: number; done: number };
+      closerSuccessRate: number;
+    }>;
+  }> {
+    assertCanAccessWhatsapp(user);
+
+    const { from, to, startIso, endIso } = this.resolveStatsPeriod(
+      fromKey,
+      toKey,
+      366,
+    );
+
+    const memberSql = `
+      WITH period AS (
+        SELECT setter_id, closer_id, status
+        FROM public.meetings
+        WHERE meeting_date >= $1::timestamptz
+          AND meeting_date < $2::timestamptz
+      ),
+      setter_stats AS (
+        SELECT
+          setter_id AS user_id,
+          COUNT(*)::int AS setter_total,
+          COUNT(*) FILTER (WHERE status = 'done')::int AS setter_done
+        FROM period
+        WHERE setter_id IS NOT NULL
+        GROUP BY setter_id
+      ),
+      closer_stats AS (
+        SELECT
+          closer_id AS user_id,
+          COUNT(*)::int AS closer_total,
+          COUNT(*) FILTER (WHERE status = 'done')::int AS closer_done
+        FROM period
+        WHERE closer_id IS NOT NULL
+        GROUP BY closer_id
+      )
+      SELECT
+        COALESCE(s.user_id, c.user_id)::text AS user_id,
+        COALESCE(s.setter_total, 0)::int AS setter_total,
+        COALESCE(s.setter_done, 0)::int AS setter_done,
+        COALESCE(c.closer_total, 0)::int AS closer_total,
+        COALESCE(c.closer_done, 0)::int AS closer_done
+      FROM setter_stats s
+      FULL OUTER JOIN closer_stats c ON s.user_id = c.user_id
+      ORDER BY
+        COALESCE(c.closer_done, 0) DESC,
+        COALESCE(s.setter_total, 0) DESC,
+        COALESCE(s.user_id, c.user_id)
+    `;
+
+    const totalsSql = `
+      SELECT
+        COUNT(*)::int AS total_meetings,
+        COUNT(*) FILTER (WHERE status = 'done')::int AS total_done
+      FROM public.meetings
+      WHERE meeting_date >= $1::timestamptz
+        AND meeting_date < $2::timestamptz
+    `;
+
+    const [memberRes, totalsRes] = await Promise.all([
+      this.supabase.query<{
+        user_id: string;
+        setter_total: number;
+        setter_done: number;
+        closer_total: number;
+        closer_done: number;
+      }>(memberSql, [startIso, endIso]),
+      this.supabase.query<{
+        total_meetings: number;
+        total_done: number;
+      }>(totalsSql, [startIso, endIso]),
+    ]);
+
+    if (memberRes.error) {
+      throw new ConflictException({ message: memberRes.error.message });
+    }
+    if (totalsRes.error) {
+      throw new ConflictException({ message: totalsRes.error.message });
+    }
+
+    const userIds = memberRes.rows.map((r) => String(r.user_id));
+    const usersById = await this.loadUsersByIds(userIds);
+
+    const items = memberRes.rows.map((r) => {
+      const userId = String(r.user_id);
+      const asCloserTotal = Number(r.closer_total) || 0;
+      const asCloserDone = Number(r.closer_done) || 0;
+      const closerSuccessRate =
+        asCloserTotal === 0
+          ? 0
+          : Math.round((asCloserDone / asCloserTotal) * 100) / 100;
+      return {
+        user: usersById.get(userId) ?? stubAssignee(userId),
+        asSetter: {
+          total: Number(r.setter_total) || 0,
+          done: Number(r.setter_done) || 0,
+        },
+        asCloser: {
+          total: asCloserTotal,
+          done: asCloserDone,
+        },
+        closerSuccessRate,
+      };
+    });
+
+    const totalsRow = totalsRes.rows[0];
+    return {
+      from,
+      to,
+      totals: {
+        totalMeetings: Number(totalsRow?.total_meetings) || 0,
+        totalDone: Number(totalsRow?.total_done) || 0,
+      },
+      items,
+    };
+  }
+
+  /**
+   * Resolve inclusive Casa calendar days → UTC half-open [start, end).
+   * Defaults to current Casa month when from/to omitted.
+   */
+  private resolveStatsPeriod(
+    fromKey: string | undefined,
+    toKey: string | undefined,
+    maxDays: number,
+  ): { from: string; to: string; startIso: string; endIso: string } {
+    const hasFrom = fromKey != null && String(fromKey).trim() !== '';
+    const hasTo = toKey != null && String(toKey).trim() !== '';
+    if (hasFrom !== hasTo) {
+      throw new BadRequestException({
+        message: 'from et to doivent être fournis ensemble (YYYY-MM-DD).',
+      });
+    }
+
+    let from: string;
+    let to: string;
+    if (!hasFrom) {
+      const now = DateTime.now().setZone(CASABLANCA_TZ);
+      from = now.startOf('month').toISODate()!;
+      to = now.endOf('month').toISODate()!;
+    } else {
+      from = String(fromKey).trim().slice(0, 10);
+      to = String(toKey).trim().slice(0, 10);
+      if (
+        !/^\d{4}-\d{2}-\d{2}$/.test(from) ||
+        !/^\d{4}-\d{2}-\d{2}$/.test(to)
+      ) {
+        throw new BadRequestException({
+          message: 'from et to doivent être YYYY-MM-DD',
+        });
+      }
+      if (from > to) {
+        throw new BadRequestException({ message: 'from doit être ≤ to' });
+      }
+    }
+
+    const fromDt = DateTime.fromISO(from, { zone: CASABLANCA_TZ }).startOf(
+      'day',
+    );
+    const toExclusive = DateTime.fromISO(to, { zone: CASABLANCA_TZ })
+      .startOf('day')
+      .plus({ days: 1 });
+    if (!fromDt.isValid || !toExclusive.isValid) {
+      throw new BadRequestException({ message: 'from/to invalides' });
+    }
+
+    const daySpan = Math.floor(toExclusive.diff(fromDt, 'days').days);
+    if (daySpan > maxDays) {
+      throw new BadRequestException({
+        message: `Période max ${maxDays} jours (from…to inclus).`,
+      });
+    }
+
+    return {
+      from,
+      to,
+      startIso: fromDt.toUTC().toISO()!,
+      endIso: toExclusive.toUTC().toISO()!,
+    };
   }
 
   async create(dto: CreateMeetingDto, user: AppUser) {
