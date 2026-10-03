@@ -614,10 +614,12 @@ export class ClickupService {
   }
 
   /**
-   * Dashboard leads — agrégats SQL.
+   * Dashboard leads — agrégats SQL sur public.clickup_leads.
    * Sans from/to : scope global ; createdInPeriod=0 ; byDay=[].
    * Avec from/to (jours Casa inclus) : total/byStatus/byList/byDay filtrés
    * sur created_at dans la période ; createdInPeriod = total.
+   *
+   * Important : sans période, pas de params NULL (évite filtre mort / 0 lignes).
    */
   async getLeadsStatsOverview(
     user: AppUser,
@@ -635,14 +637,18 @@ export class ClickupService {
     assertCanAccessLeads(user);
 
     const period = this.resolveOptionalCasaPeriod(fromKey, toKey, 366);
-    const startIso = period?.startIso ?? null;
-    const endIso = period?.endIso ?? null;
+    // Sans période : pas de WHERE. Avec période : bornes UTC half-open.
+    const periodWhere = period
+      ? `WHERE created_at >= $1::timestamptz AND created_at < $2::timestamptz`
+      : '';
+    const periodParams: unknown[] = period
+      ? [period.startIso, period.endIso]
+      : [];
 
     const totalSql = `
       SELECT COUNT(*)::int AS total
       FROM public.clickup_leads
-      WHERE ($1::timestamptz IS NULL OR created_at >= $1::timestamptz)
-        AND ($2::timestamptz IS NULL OR created_at < $2::timestamptz)
+      ${periodWhere}
     `;
 
     const byStatusSql = `
@@ -650,39 +656,44 @@ export class ClickupService {
         COALESCE(NULLIF(TRIM(status), ''), 'Sans statut') AS status,
         COUNT(*)::int AS count
       FROM public.clickup_leads
-      WHERE ($1::timestamptz IS NULL OR created_at >= $1::timestamptz)
-        AND ($2::timestamptz IS NULL OR created_at < $2::timestamptz)
-      GROUP BY 1
+      ${periodWhere}
+      GROUP BY COALESCE(NULLIF(TRIM(status), ''), 'Sans statut')
       ORDER BY count DESC, status ASC
     `;
 
+    // list_name est une colonne de clickup_leads (pas de join).
     const byListSql = `
       SELECT
-        COALESCE(NULLIF(TRIM(list_id), ''), '_none') AS list_id,
+        COALESCE(NULLIF(TRIM(list_id), ''), '') AS list_id,
         COALESCE(
-          NULLIF(TRIM(MAX(list_name)), ''),
+          NULLIF(TRIM(list_name), ''),
           NULLIF(TRIM(list_id), ''),
-          '_none'
+          'Sans liste'
         ) AS list_name,
         COUNT(*)::int AS count
       FROM public.clickup_leads
-      WHERE ($1::timestamptz IS NULL OR created_at >= $1::timestamptz)
-        AND ($2::timestamptz IS NULL OR created_at < $2::timestamptz)
-      GROUP BY COALESCE(NULLIF(TRIM(list_id), ''), '_none')
+      ${periodWhere}
+      GROUP BY
+        COALESCE(NULLIF(TRIM(list_id), ''), ''),
+        COALESCE(
+          NULLIF(TRIM(list_name), ''),
+          NULLIF(TRIM(list_id), ''),
+          'Sans liste'
+        )
       ORDER BY count DESC, list_name ASC
     `;
 
     const [totalRes, statusRes, listRes] = await Promise.all([
-      this.supabase.query<{ total: number }>(totalSql, [startIso, endIso]),
-      this.supabase.query<{ status: string; count: number }>(byStatusSql, [
-        startIso,
-        endIso,
-      ]),
+      this.supabase.query<{ total: number }>(totalSql, periodParams),
+      this.supabase.query<{ status: string; count: number }>(
+        byStatusSql,
+        periodParams,
+      ),
       this.supabase.query<{
         list_id: string;
         list_name: string;
         count: number;
-      }>(byListSql, [startIso, endIso]),
+      }>(byListSql, periodParams),
     ]);
 
     if (totalRes.error) {
@@ -703,11 +714,11 @@ export class ClickupService {
     }));
 
     const byList = listRes.rows.map((r) => {
-      const listId = String(r.list_id);
-      const listName = String(r.list_name || listId);
+      const listId = String(r.list_id ?? '');
+      const listName = String(r.list_name || listId || 'Sans liste');
       return {
-        listId: listId === '_none' ? '' : listId,
-        listName: listId === '_none' ? listName || 'Sans liste' : listName,
+        listId,
+        listName,
         count: Number(r.count) || 0,
       };
     });
