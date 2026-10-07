@@ -8,6 +8,7 @@ import { AppService } from './app.service';
 import { AdminModule } from './admin/admin.module';
 import { AuthModule } from './auth/auth.module';
 import { ClickupModule } from './clickup/clickup.module';
+import { DashboardModule } from './dashboard/dashboard.module';
 import { CloudinaryModule } from './cloudinary/cloudinary.module';
 import { ClientsModule } from './clients/clients.module';
 import { DevisModule } from './devis/devis.module';
@@ -35,6 +36,7 @@ import { PublicModule } from './public/public.module';
     SupabaseModule,
     AuthModule,
     AdminModule,
+    DashboardModule,
     RealtimeModule,
     ClickupModule,
     CloudinaryModule,

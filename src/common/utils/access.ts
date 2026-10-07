@@ -57,6 +57,7 @@ const WHATSAPP_ADMIN_API_PREFIXES = [
   '/notifications',
   '/leads',
   '/meetings',
+  '/dashboard',
   '/email',
   '/clickup/sync',
   '/auth/me',
