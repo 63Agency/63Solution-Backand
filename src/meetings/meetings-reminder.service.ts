@@ -781,7 +781,8 @@ export class MeetingsReminderService {
 
   /**
    * Ensure Meet link for online meetings only.
-   * Phone-call RDV (or intentional null meet_link for phone titles) stay without a link.
+   * Prefer Calendar event + Meet; fallback spaces.create.
+   * Phone-call RDV stay without a link.
    */
   private async ensureMeetLink(meeting: Meeting): Promise<Meeting> {
     if (hasMeetingMeetLink(meeting)) {
@@ -793,8 +794,42 @@ export class MeetingsReminderService {
       return meeting;
     }
 
-    const created = await this.googleMeet.createSpace();
-    if (!created?.meetLink) {
+    let meetLink: string | null = null;
+    let meetSpace: string | null = null;
+    let googleEventId: string | null = meeting.googleEventId;
+
+    try {
+      const attendeeEmails = await this.meetings.buildAttendeeEmails(
+        meeting.contactEmail,
+        meeting.assignedUserIds,
+      );
+      const event = await this.googleMeet.createEventWithMeet({
+        title: meeting.title,
+        contactName: meeting.contactName,
+        contactEmail: meeting.contactEmail,
+        meetingDateIso: meeting.meetingDate,
+        durationMinutes: meeting.durationMinutes,
+        attendeeEmails,
+      });
+      if (event) {
+        meetLink = event.meetLink;
+        googleEventId = event.eventId;
+        meetSpace = null;
+      } else {
+        const space = await this.googleMeet.createSpace();
+        if (space) {
+          meetLink = space.meetLink;
+          meetSpace = space.spaceName;
+        }
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn(
+        `[MeetingsReminder] génération Google Meet échouée id=${meeting.id}: ${message}`,
+      );
+    }
+
+    if (!meetLink) {
       this.logger.warn(
         `[MeetingsReminder] meet_link manquant et génération Google Meet échouée id=${meeting.id}`,
       );
@@ -804,8 +839,9 @@ export class MeetingsReminderService {
     try {
       return await this.meetings.saveMeetLink(
         meeting.id,
-        created.meetLink,
-        created.spaceName,
+        meetLink,
+        meetSpace,
+        googleEventId,
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -814,8 +850,9 @@ export class MeetingsReminderService {
       );
       return {
         ...meeting,
-        meetLink: created.meetLink,
-        meetSpace: created.spaceName,
+        meetLink,
+        meetSpace,
+        googleEventId,
       };
     }
   }

@@ -153,6 +153,8 @@ export type MeetingRow = {
   notes: string | null;
   meet_link: string | null;
   meet_space: string | null;
+  /** Google Calendar event id (primary) — patch/delete. */
+  google_event_id?: string | null;
   created_by?: string | null;
   setter_id?: string | null;
   closer_id?: string | null;
@@ -214,6 +216,8 @@ export type Meeting = {
   notes: string | null;
   meetLink: string | null;
   meetSpace: string | null;
+  /** Google Calendar event id — null si legacy spaces.create ou échec Calendar. */
+  googleEventId: string | null;
   createdAt: string;
   updatedAt: string;
   /** Présent si notifyOnCreate a été demandé à la création. */

@@ -149,13 +149,30 @@ function mapMeetingBase(
     notes: r.notes != null ? String(r.notes) : null,
     meetLink: r.meet_link ? String(r.meet_link) : null,
     meetSpace: r.meet_space ? String(r.meet_space) : null,
+    googleEventId: r.google_event_id ? String(r.google_event_id) : null,
     createdAt: String(r.created_at ?? ''),
     updatedAt: String(r.updated_at ?? ''),
   };
 }
 
 const SELECT_COLS =
-  'id, lead_id, title, meeting_date, duration_minutes, contact_name, contact_phone, contact_email, status, reminder_whatsapp_sent, reminder_email_sent, reminders, manual_reminder_sent_at, manual_reminder_whatsapp_sent, manual_reminder_email_sent, notes, meet_link, meet_space, created_by, setter_id, closer_id, created_at, updated_at';
+  'id, lead_id, title, meeting_date, duration_minutes, contact_name, contact_phone, contact_email, status, reminder_whatsapp_sent, reminder_email_sent, reminders, manual_reminder_sent_at, manual_reminder_whatsapp_sent, manual_reminder_email_sent, notes, meet_link, meet_space, google_event_id, created_by, setter_id, closer_id, created_at, updated_at';
+
+/** Emails attendees Calendar : lowercase, dédupliqués, syntaxe basique. */
+export function normalizeAttendeeEmails(
+  emails: Array<string | null | undefined>,
+): string[] {
+  const set = new Set<string>();
+  for (const raw of emails) {
+    const e = String(raw ?? '')
+      .trim()
+      .toLowerCase();
+    if (e && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) {
+      set.add(e);
+    }
+  }
+  return [...set];
+}
 
 @Injectable()
 export class MeetingsService {
@@ -343,6 +360,72 @@ export class MeetingsService {
       });
     }
     return map;
+  }
+
+  /**
+   * Attendees Google Calendar = contact client (si email) + assignés staff.
+   * Le créateur est déjà dans assignedUserIds.
+   */
+  async buildAttendeeEmails(
+    contactEmail: string | null | undefined,
+    assignedUserIds: string[],
+  ): Promise<string[]> {
+    const usersById = await this.loadUsersByIds(assignedUserIds);
+    return normalizeAttendeeEmails([
+      contactEmail,
+      ...[...usersById.values()].map((u) => u.email),
+    ]);
+  }
+
+  /**
+   * Calendar event + Meet, fallback spaces.create. Ne throw jamais.
+   */
+  private async createGoogleMeetForMeeting(input: {
+    title: string;
+    contactName: string;
+    contactEmail: string | null;
+    meetingDateIso: string;
+    durationMinutes: number;
+    assignedUserIds: string[];
+  }): Promise<{
+    meetLink: string | null;
+    meetSpace: string | null;
+    googleEventId: string | null;
+  }> {
+    try {
+      const attendeeEmails = await this.buildAttendeeEmails(
+        input.contactEmail,
+        input.assignedUserIds,
+      );
+      const event = await this.googleMeet.createEventWithMeet({
+        title: input.title,
+        contactName: input.contactName,
+        contactEmail: input.contactEmail,
+        meetingDateIso: input.meetingDateIso,
+        durationMinutes: input.durationMinutes,
+        attendeeEmails,
+      });
+      if (event) {
+        return {
+          meetLink: event.meetLink,
+          meetSpace: null,
+          googleEventId: event.eventId,
+        };
+      }
+
+      const space = await this.googleMeet.createSpace();
+      if (space) {
+        return {
+          meetLink: space.meetLink,
+          meetSpace: space.spaceName,
+          googleEventId: null,
+        };
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`createGoogleMeetForMeeting failed: ${message}`);
+    }
+    return { meetLink: null, meetSpace: null, googleEventId: null };
   }
 
   /** Normalize + validate members; each needs phone and/or email. */
@@ -1181,10 +1264,6 @@ export class MeetingsService {
       dto.durationMinutes ?? DEFAULT_MEETING_DURATION,
     );
 
-    // Appel téléphonique → pas de Google Meet.
-    const meet = isPhoneCallMeetingTitle(title)
-      ? null
-      : await this.googleMeet.createSpace();
     const meetingDateIso = new Date(meetingDate).toISOString();
     await this.blockedDays.assertMeetingDateNotBlocked(meetingDateIso);
     await this.availabilities.assertAssigneesAvailable(
@@ -1192,6 +1271,18 @@ export class MeetingsService {
       durationMinutes,
       assignedUserIds,
     );
+
+    // Appel téléphonique → pas de Google. Sinon Calendar+Meet, fallback spaces.create.
+    const meet = isPhoneCallMeetingTitle(title)
+      ? { meetLink: null, meetSpace: null, googleEventId: null }
+      : await this.createGoogleMeetForMeeting({
+          title,
+          contactName,
+          contactEmail,
+          meetingDateIso,
+          durationMinutes,
+          assignedUserIds,
+        });
 
     const now = new Date().toISOString();
     const sb = this.supabase.getClient();
@@ -1207,8 +1298,9 @@ export class MeetingsService {
         contact_email: contactEmail,
         status,
         notes,
-        meet_link: meet?.meetLink ?? null,
-        meet_space: meet?.spaceName ?? null,
+        meet_link: meet.meetLink,
+        meet_space: meet.meetSpace,
+        google_event_id: meet.googleEventId,
         reminders,
         reminder_whatsapp_sent: false,
         reminder_email_sent: false,
@@ -1253,7 +1345,7 @@ export class MeetingsService {
     }
 
     this.logger.log(
-      `Meeting created id=${meeting.id} meet=${meet?.meetLink ? 'yes' : 'no'} members=${meeting.members.length} assignees=${assignedUserIds.length} notifyOnCreate=${dto.notifyOnCreate === true}`,
+      `Meeting created id=${meeting.id} meet=${meet.meetLink ? 'yes' : 'no'} googleEvent=${meet.googleEventId ? 'yes' : 'no'} members=${meeting.members.length} assignees=${assignedUserIds.length} notifyOnCreate=${dto.notifyOnCreate === true}`,
     );
 
     // 2) Seul point d’envoi de la confirmation immédiate (WA + email).
@@ -1297,16 +1389,22 @@ export class MeetingsService {
   async saveMeetLink(
     id: string,
     meetLink: string,
-    meetSpace: string,
+    meetSpace: string | null,
+    googleEventId?: string | null,
   ): Promise<Meeting> {
+    const patch: Record<string, unknown> = {
+      meet_link: meetLink,
+      meet_space: meetSpace,
+      updated_at: new Date().toISOString(),
+    };
+    if (googleEventId !== undefined) {
+      patch.google_event_id = googleEventId;
+    }
+
     const sb = this.supabase.getClient();
     const { data, error } = await sb
       .from('meetings')
-      .update({
-        meet_link: meetLink,
-        meet_space: meetSpace,
-        updated_at: new Date().toISOString(),
-      })
+      .update(patch)
       .eq('id', id)
       .select(SELECT_COLS)
       .single();
@@ -1330,14 +1428,72 @@ export class MeetingsService {
       });
     }
 
-    const meet = await this.googleMeet.createSpace();
-    if (!meet) {
+    const assignees = await this.loadAssigneesForMeeting(id);
+    const attendeeEmails = await this.buildAttendeeEmails(
+      existing.contact_email,
+      assignees.assignedUserIds,
+    );
+    const durationMinutes = normalizeMeetingDuration(
+      existing.duration_minutes,
+    );
+
+    const googleEventId = existing.google_event_id
+      ? String(existing.google_event_id)
+      : null;
+
+    if (googleEventId) {
+      const patched = await this.googleMeet.patchEvent({
+        eventId: googleEventId,
+        title: String(existing.title),
+        contactName: String(existing.contact_name),
+        meetingDateIso: String(existing.meeting_date),
+        durationMinutes,
+        attendeeEmails,
+        regenerateConference: true,
+      });
+      if (patched?.meetLink) {
+        const updated = await this.saveMeetLink(
+          id,
+          patched.meetLink,
+          existing.meet_space,
+          googleEventId,
+        );
+        this.logger.log(
+          `Meeting meet link regenerated (patch conference) id=${id}`,
+        );
+        return updated;
+      }
+      // Patch échoué → tenter un nouvel événement (évite de rester sans lien).
+    }
+
+    const created = await this.createGoogleMeetForMeeting({
+      title: String(existing.title),
+      contactName: String(existing.contact_name),
+      contactEmail: existing.contact_email
+        ? String(existing.contact_email)
+        : null,
+      meetingDateIso: String(existing.meeting_date),
+      durationMinutes,
+      assignedUserIds: assignees.assignedUserIds,
+    });
+
+    if (!created.meetLink) {
       throw new ConflictException({
         message: 'Impossible de générer un lien Google Meet.',
       });
     }
 
-    const updated = await this.saveMeetLink(id, meet.meetLink, meet.spaceName);
+    // Ancien événement orphelin si patch a échoué puis create a réussi.
+    if (googleEventId && created.googleEventId && created.googleEventId !== googleEventId) {
+      await this.googleMeet.deleteEvent(googleEventId);
+    }
+
+    const updated = await this.saveMeetLink(
+      id,
+      created.meetLink,
+      created.meetSpace,
+      created.googleEventId,
+    );
     this.logger.log(`Meeting meet link regenerated id=${id}`);
     return updated;
   }
@@ -1369,8 +1525,16 @@ export class MeetingsService {
         continue;
       }
       try {
-        const meet = await this.googleMeet.createSpace();
-        if (!meet) {
+        const assignees = await this.loadAssigneesForMeeting(row.id);
+        const meet = await this.createGoogleMeetForMeeting({
+          title: String(row.title),
+          contactName: String(row.contact_name),
+          contactEmail: row.contact_email ? String(row.contact_email) : null,
+          meetingDateIso: String(row.meeting_date),
+          durationMinutes: normalizeMeetingDuration(row.duration_minutes),
+          assignedUserIds: assignees.assignedUserIds,
+        });
+        if (!meet.meetLink) {
           failed += 1;
           continue;
         }
@@ -1379,7 +1543,8 @@ export class MeetingsService {
           .from('meetings')
           .update({
             meet_link: meet.meetLink,
-            meet_space: meet.spaceName,
+            meet_space: meet.meetSpace,
+            google_event_id: meet.googleEventId,
             updated_at: new Date().toISOString(),
           })
           .eq('id', row.id);
@@ -1423,17 +1588,11 @@ export class MeetingsService {
       }
       patch.title = title;
 
-      // Téléphone → retirer Meet. Autre titre sans Meet → en créer un.
+      // Téléphone → retirer Meet / Calendar (delete Google après le patch SQL).
       if (isPhoneCallMeetingTitle(title)) {
         patch.meet_link = null;
         patch.meet_space = null;
-      } else if (
-        isPhoneCallMeetingTitle(existing.title) ||
-        !existing.meet_link
-      ) {
-        const meet = await this.googleMeet.createSpace();
-        patch.meet_link = meet?.meetLink ?? null;
-        patch.meet_space = meet?.spaceName ?? null;
+        patch.google_event_id = null;
       }
     }
 
@@ -1585,6 +1744,25 @@ export class MeetingsService {
       });
     }
 
+    const nextTitle =
+      patch.title !== undefined ? String(patch.title) : existing.title;
+    const becameOnline =
+      !isPhoneCallMeetingTitle(nextTitle) &&
+      isPhoneCallMeetingTitle(existing.title);
+
+    const calendarRelevantChanged =
+      becameOnline ||
+      dto.title !== undefined ||
+      dto.meetingDate !== undefined ||
+      dto.durationMinutes !== undefined ||
+      dto.contactName !== undefined ||
+      dto.contactEmail !== undefined ||
+      dto.assignedUserIds !== undefined;
+
+    const previousGoogleEventId = existing.google_event_id
+      ? String(existing.google_event_id)
+      : null;
+
     const sb = this.supabase.getClient();
     const { data, error } = await sb
       .from('meetings')
@@ -1604,6 +1782,79 @@ export class MeetingsService {
     }
     if (assigneesToSave !== undefined) {
       await this.replaceAssignees(id, assigneesToSave);
+    }
+
+    // Sync Google Calendar (jamais bloquant).
+    try {
+      if (isPhoneCallMeetingTitle(nextTitle)) {
+        if (previousGoogleEventId) {
+          await this.googleMeet.deleteEvent(previousGoogleEventId);
+        }
+      } else if (calendarRelevantChanged || !previousGoogleEventId) {
+        const row = data as MeetingRow;
+        const nextMeetingDateIso = String(row.meeting_date);
+        const nextDuration = normalizeMeetingDuration(row.duration_minutes);
+        const nextContactName = String(row.contact_name);
+        const nextContactEmail = row.contact_email
+          ? String(row.contact_email)
+          : null;
+        const nextTitleStr = String(row.title);
+
+        let nextAssigneeIds = assigneesToSave;
+        if (nextAssigneeIds === undefined) {
+          const current = await this.loadAssigneesForMeeting(id);
+          nextAssigneeIds = current.assignedUserIds;
+        }
+        const attendeeEmails = await this.buildAttendeeEmails(
+          nextContactEmail,
+          nextAssigneeIds,
+        );
+
+        const googleEventId = row.google_event_id
+          ? String(row.google_event_id)
+          : previousGoogleEventId;
+
+        if (googleEventId && !becameOnline) {
+          await this.googleMeet.patchEvent({
+            eventId: googleEventId,
+            title: nextTitleStr,
+            contactName: nextContactName,
+            meetingDateIso: nextMeetingDateIso,
+            durationMinutes: nextDuration,
+            attendeeEmails,
+          });
+        } else {
+          const created = await this.createGoogleMeetForMeeting({
+            title: nextTitleStr,
+            contactName: nextContactName,
+            contactEmail: nextContactEmail,
+            meetingDateIso: nextMeetingDateIso,
+            durationMinutes: nextDuration,
+            assignedUserIds: nextAssigneeIds,
+          });
+          if (created.meetLink) {
+            const { data: synced, error: syncErr } = await sb
+              .from('meetings')
+              .update({
+                meet_link: created.meetLink,
+                meet_space: created.meetSpace,
+                google_event_id: created.googleEventId,
+                updated_at: new Date().toISOString(),
+              })
+              .eq('id', id)
+              .select(SELECT_COLS)
+              .single();
+            if (!syncErr && synced) {
+              Object.assign(data as object, synced);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn(
+        `Google Calendar sync failed on update id=${id}: ${message}`,
+      );
     }
 
     let meeting = await this.enrich(data as MeetingRow);
@@ -1632,7 +1883,14 @@ export class MeetingsService {
 
   async remove(id: string, user: AppUser) {
     assertCanAccessMeetings(user);
-    await this.assertCanViewMeeting(id, user);
+    const existing = await this.assertCanViewMeeting(id, user);
+
+    const googleEventId = existing.google_event_id
+      ? String(existing.google_event_id)
+      : null;
+    if (googleEventId) {
+      await this.googleMeet.deleteEvent(googleEventId);
+    }
 
     const sb = this.supabase.getClient();
     const { error } = await sb.from('meetings').delete().eq('id', id);
