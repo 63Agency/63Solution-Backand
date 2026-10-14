@@ -15,11 +15,15 @@ import { AuthGuard } from '@nestjs/passport';
 import type { AppUser } from '../auth/types/app-user';
 import { ClickupService } from '../clickup/clickup.service';
 import { LeadsStatsOverviewQueryDto } from './dto/leads-stats-overview-query.dto';
+import { LeadsService } from './leads.service';
 
 @Controller('leads')
 @UseGuards(AuthGuard('jwt'))
 export class LeadsController {
-  constructor(private readonly clickup: ClickupService) {}
+  constructor(
+    private readonly clickup: ClickupService,
+    private readonly leads: LeadsService,
+  ) {}
 
   @Get()
   list(
@@ -66,6 +70,12 @@ export class LeadsController {
   @HttpCode(HttpStatus.OK)
   sync(@Req() req: { user: AppUser }) {
     return this.clickup.syncLeadsForUser(req.user);
+  }
+
+  /** Thread WhatsApp du lead (match phone ↔ conversation). */
+  @Get(':id/whatsapp-thread')
+  getWhatsappThread(@Req() req: { user: AppUser }, @Param('id') id: string) {
+    return this.leads.getWhatsappThread(req.user, id);
   }
 
   @Get(':id')
