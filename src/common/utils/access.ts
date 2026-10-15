@@ -92,6 +92,14 @@ function isPathAllowed(
     return true;
   }
 
+  // Boîte mail personnelle (tous rôles authentifiés — scoped JWT user_id).
+  if (
+    normalized === '/me/mail-account' ||
+    normalized.startsWith('/me/mail-account/')
+  ) {
+    return true;
+  }
+
   for (const prefix of prefixes) {
     if (normalized === prefix || normalized.startsWith(`${prefix}/`)) {
       return true;

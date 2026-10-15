@@ -22,6 +22,7 @@ import { UsersModule } from './users/users.module';
 import { WhatsappModule } from './whatsapp/whatsapp.module';
 import { WhatsappAdminAccessInterceptor } from './common/interceptors/whatsapp-admin-access.interceptor';
 import { LeadsModule } from './leads/leads.module';
+import { MailAccountsModule } from './mail-accounts/mail-accounts.module';
 import { RealtimeModule } from './realtime/realtime.module';
 import { PublicModule } from './public/public.module';
 
@@ -50,6 +51,7 @@ import { PublicModule } from './public/public.module';
     NotificationsModule,
     WhatsappModule,
     LeadsModule,
+    MailAccountsModule,
     PublicModule,
   ],
   controllers: [AppController],
