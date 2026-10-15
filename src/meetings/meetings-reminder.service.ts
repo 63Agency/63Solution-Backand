@@ -4,6 +4,7 @@ import { Cron } from '@nestjs/schedule';
 import { MailerService } from '../common/mailer/mailer.service';
 import { SupabaseService } from '../supabase/supabase.service';
 import { MetaService } from '../whatsapp/meta.service';
+import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { GoogleMeetService } from './google-meet.service';
 import { MeetingsService } from './meetings.service';
 import type {
@@ -128,6 +129,7 @@ export class MeetingsReminderService {
     private readonly meetings: MeetingsService,
     private readonly supabase: SupabaseService,
     private readonly meta: MetaService,
+    private readonly whatsapp: WhatsappService,
     private readonly mailer: MailerService,
     private readonly googleMeet: GoogleMeetService,
     private readonly config: ConfigService,
@@ -943,6 +945,19 @@ export class MeetingsReminderService {
         this.logger.log(
           `[MeetingsReminder] WhatsApp OK (Meta accepted) id=${meeting.id} to=${recipient.phone} wamid=${result.whatsappMessageId ?? '-'} template=${templateName}`,
         );
+
+        // Persist into inbox thread — never fail the reminder if DB/realtime fails.
+        try {
+          await this.whatsapp.persistSentTemplateMessage({
+            phone: recipient.phone,
+            sent: result,
+          });
+        } catch (persistErr) {
+          const persistMsg = extractErrorMessage(persistErr);
+          this.logger.warn(
+            `[MeetingsReminder] WA persist failed (send OK) id=${meeting.id} to=${recipient.phone}: ${persistMsg}`,
+          );
+        }
       } catch (err) {
         lastError = extractErrorMessage(err);
         this.logger.warn(

@@ -788,7 +788,11 @@ export class WhatsappService {
       type: string;
       parameters: Array<{ type: string; text: string }>;
     }>;
-  }): Promise<{ conversationId: string; messageId: string }> {
+  }): Promise<{
+    conversationId: string;
+    messageId: string;
+    message: WhatsappMessage;
+  }> {
     const phone = normalizePhoneNumber(input.phone);
     if (!phone) {
       throw new BadRequestException({ message: 'Numéro WhatsApp invalide.' });
@@ -801,8 +805,34 @@ export class WhatsappService {
       input.components,
       input.variable1,
     );
+
+    return this.persistSentTemplateMessage({ phone, sent });
+  }
+
+  /**
+   * Persist an already-accepted Meta template send (conversation + whatsapp_messages).
+   * Used by meeting reminders after meta.sendTemplateMessage — does not call Meta again.
+   */
+  async persistSentTemplateMessage(input: {
+    phone: string;
+    sent: {
+      whatsappMessageId: string | null;
+      text: string;
+      status: string;
+      sentAt: string | null;
+    };
+  }): Promise<{
+    conversationId: string;
+    messageId: string;
+    message: WhatsappMessage;
+  }> {
+    const phone = normalizePhoneNumber(input.phone);
+    if (!phone) {
+      throw new BadRequestException({ message: 'Numéro WhatsApp invalide.' });
+    }
+
     const now = new Date().toISOString();
-    const sentAt = sent.sentAt ?? now;
+    const sentAt = input.sent.sentAt ?? now;
 
     const conv = await this.findOrCreateConversation({
       phone,
@@ -810,7 +840,7 @@ export class WhatsappService {
       watiContactId: phone,
       watiConversationId: null,
       source: 'meta',
-      lastMessageText: sent.text,
+      lastMessageText: input.sent.text,
       lastMessageAt: sentAt,
       incrementUnread: false,
     });
@@ -818,10 +848,10 @@ export class WhatsappService {
     const { message } = await this.persistMessage({
       conversationId: conv.id,
       direction: 'outbound',
-      body: sent.text,
+      body: input.sent.text,
       type: 'template',
-      status: sent.status,
-      watiMessageId: sent.whatsappMessageId,
+      status: input.sent.status,
+      watiMessageId: input.sent.whatsappMessageId,
       watiLocalId: null,
       sentAt,
       incrementUnread: false,
@@ -829,7 +859,11 @@ export class WhatsappService {
 
     await this.emitOutboundMessageSafe(message, conv.id);
 
-    return { conversationId: conv.id, messageId: message.id };
+    return {
+      conversationId: conv.id,
+      messageId: message.id,
+      message,
+    };
   }
 
   /**

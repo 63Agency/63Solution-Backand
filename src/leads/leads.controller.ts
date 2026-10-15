@@ -1,4 +1,5 @@
 import {
+  Body,
   Controller,
   DefaultValuePipe,
   Get,
@@ -15,6 +16,7 @@ import { AuthGuard } from '@nestjs/passport';
 import type { AppUser } from '../auth/types/app-user';
 import { ClickupService } from '../clickup/clickup.service';
 import { LeadsStatsOverviewQueryDto } from './dto/leads-stats-overview-query.dto';
+import { SendLeadWhatsappTemplateDto } from './dto/send-lead-whatsapp-template.dto';
 import { LeadsService } from './leads.service';
 
 @Controller('leads')
@@ -76,6 +78,17 @@ export class LeadsController {
   @Get(':id/whatsapp-thread')
   getWhatsappThread(@Req() req: { user: AppUser }, @Param('id') id: string) {
     return this.leads.getWhatsappThread(req.user, id);
+  }
+
+  /** Envoi template Meta au lead — persisté dans whatsapp_messages. */
+  @Post(':id/whatsapp/template')
+  @HttpCode(HttpStatus.OK)
+  sendWhatsappTemplate(
+    @Req() req: { user: AppUser },
+    @Param('id') id: string,
+    @Body() dto: SendLeadWhatsappTemplateDto,
+  ) {
+    return this.leads.sendWhatsappTemplate(req.user, id, dto);
   }
 
   @Get(':id')

@@ -1,4 +1,9 @@
-import { ConflictException, Injectable, Logger } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  Logger,
+} from '@nestjs/common';
 import type { AppUser } from '../auth/types/app-user';
 import { assertCanAccessLeads } from '../common/utils/access';
 import { ClickupService } from '../clickup/clickup.service';
@@ -8,7 +13,9 @@ import type {
   WhatsappConversation,
   WhatsappMessage,
 } from '../whatsapp/types/whatsapp.types';
+import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { toMoroccoWhatsappCandidate } from '../whatsapp/utils/phone';
+import type { SendLeadWhatsappTemplateDto } from './dto/send-lead-whatsapp-template.dto';
 import type { LeadWhatsappThreadResponse } from './types/leads.types';
 
 type ConversationRow = {
@@ -122,6 +129,7 @@ export class LeadsService {
   constructor(
     private readonly clickup: ClickupService,
     private readonly supabase: SupabaseService,
+    private readonly whatsapp: WhatsappService,
   ) {}
 
   /**
@@ -183,5 +191,59 @@ export class LeadsService {
       conversation: mapConversation(convRow),
       messages: ((msgRows ?? []) as MessageRow[]).map(mapMessage),
     };
+  }
+
+  /**
+   * Envoi template Meta au lead (phone) — réutilise sendBroadcastTemplateToPhone
+   * (Meta + persist whatsapp_messages).
+   */
+  async sendWhatsappTemplate(
+    user: AppUser,
+    id: string,
+    dto: SendLeadWhatsappTemplateDto,
+  ): Promise<{ ok: true; message: WhatsappMessage }> {
+    assertCanAccessLeads(user);
+
+    const { item: lead } = await this.clickup.getLeadById(user, id);
+    const phoneNorm = toMoroccoWhatsappCandidate(lead.phone);
+    if (!phoneNorm?.candidate) {
+      throw new BadRequestException({
+        message: 'Ce lead n’a pas de numéro de téléphone WhatsApp.',
+      });
+    }
+
+    const templateName = String(dto.templateName ?? '').trim();
+    if (!templateName) {
+      throw new BadRequestException({ message: 'templateName requis' });
+    }
+
+    const language = String(dto.language ?? 'fr').trim() || 'fr';
+    const variables = (dto.variables ?? [])
+      .map((v) => String(v ?? '').trim())
+      .filter((t) => t.length > 0);
+
+    const components =
+      variables.length > 0
+        ? [
+            {
+              type: 'body',
+              parameters: variables.map((text) => ({ type: 'text', text })),
+            },
+          ]
+        : undefined;
+
+    const out = await this.whatsapp.sendBroadcastTemplateToPhone({
+      phone: phoneNorm.candidate,
+      templateName,
+      templateLanguage: language,
+      variable1: undefined,
+      components,
+    });
+
+    this.logger.log(
+      `Lead WA template sent lead=${lead.id} template=${templateName}/${language} messageId=${out.messageId}`,
+    );
+
+    return { ok: true, message: out.message };
   }
 }
