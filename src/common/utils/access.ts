@@ -100,6 +100,11 @@ function isPathAllowed(
     return true;
   }
 
+  // Webmail IMAP/SMTP de l’utilisateur (pas le préfixe /me/mail-account).
+  if (normalized === '/me/mail' || normalized.startsWith('/me/mail/')) {
+    return true;
+  }
+
   for (const prefix of prefixes) {
     if (normalized === prefix || normalized.startsWith(`${prefix}/`)) {
       return true;
