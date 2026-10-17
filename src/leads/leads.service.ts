@@ -1,4 +1,5 @@
 import {
+  BadGatewayException,
   BadRequestException,
   ConflictException,
   Injectable,
@@ -7,6 +8,7 @@ import {
 import type { AppUser } from '../auth/types/app-user';
 import { assertCanAccessLeads } from '../common/utils/access';
 import { ClickupService } from '../clickup/clickup.service';
+import { UserMailerService } from '../mail-accounts/user-mailer.service';
 import { SupabaseService } from '../supabase/supabase.service';
 import type {
   MessageDirection,
@@ -15,8 +17,14 @@ import type {
 } from '../whatsapp/types/whatsapp.types';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { toMoroccoWhatsappCandidate } from '../whatsapp/utils/phone';
+import type { SendLeadEmailDto } from './dto/send-lead-email.dto';
 import type { SendLeadWhatsappTemplateDto } from './dto/send-lead-whatsapp-template.dto';
-import type { LeadWhatsappThreadResponse } from './types/leads.types';
+import type {
+  LeadEmailMessage,
+  LeadEmailRow,
+  LeadWhatsappThreadResponse,
+} from './types/leads.types';
+import { EMAIL_MESSAGE_SELECT } from './types/leads.types';
 
 type ConversationRow = {
   id: string;
@@ -52,6 +60,55 @@ const CONVERSATION_SELECT =
 
 const MESSAGE_SELECT =
   'id, conversation_id, direction, body, type, status, wati_message_id, sent_at, created_at, reply_to_wati_message_id, reply_to_preview, reply_to_author, media_url, file_name, file_size';
+
+function mapEmail(row: LeadEmailRow): LeadEmailMessage {
+  const direction = row.direction === 'inbound' ? 'inbound' : 'outbound';
+  return {
+    id: String(row.id),
+    leadId: String(row.lead_id),
+    userId: row.user_id ? String(row.user_id) : null,
+    direction,
+    fromEmail: String(row.from_email),
+    toEmail: String(row.to_email),
+    subject: row.subject != null ? String(row.subject) : null,
+    bodyHtml: row.body_html != null ? String(row.body_html) : null,
+    bodyText: row.body_text != null ? String(row.body_text) : null,
+    messageId: row.message_id != null ? String(row.message_id) : null,
+    inReplyTo: row.in_reply_to != null ? String(row.in_reply_to) : null,
+    referencesHeader:
+      row.references_header != null ? String(row.references_header) : null,
+    status: String(row.status ?? 'sent'),
+    error: row.error != null ? String(row.error) : null,
+    sentAt: row.sent_at ? String(row.sent_at) : null,
+    createdAt: String(row.created_at),
+  };
+}
+
+function escapeHtml(raw: string): string {
+  return raw
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function stripHtml(raw: string): string {
+  return raw
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function formatFrom(fromName: string | null, fromEmail: string): string {
+  const name = (fromName ?? '').replace(/["\\]/g, '').trim();
+  if (!name) return fromEmail;
+  return `"${name}" <${fromEmail}>`;
+}
 
 function mapConversation(row: ConversationRow): WhatsappConversation {
   return {
@@ -130,6 +187,7 @@ export class LeadsService {
     private readonly clickup: ClickupService,
     private readonly supabase: SupabaseService,
     private readonly whatsapp: WhatsappService,
+    private readonly userMailer: UserMailerService,
   ) {}
 
   /**
@@ -245,5 +303,163 @@ export class LeadsService {
     );
 
     return { ok: true, message: out.message };
+  }
+
+  /** Fil email du lead (outbound + inbound), plus ancien d’abord. */
+  async listEmails(
+    user: AppUser,
+    id: string,
+  ): Promise<{ items: LeadEmailMessage[] }> {
+    assertCanAccessLeads(user);
+    const { item: lead } = await this.clickup.getLeadById(user, id);
+
+    const { data, error } = await this.supabase
+      .getClient()
+      .from('email_messages')
+      .select(EMAIL_MESSAGE_SELECT)
+      .eq('lead_id', lead.id)
+      .order('created_at', { ascending: true });
+
+    if (error) {
+      throw new ConflictException({ message: error.message });
+    }
+
+    return {
+      items: ((data ?? []) as LeadEmailRow[]).map(mapEmail),
+    };
+  }
+
+  /**
+   * Envoi depuis la boîte SMTP de l’utilisateur connecté.
+   * Succès → status sent. Échec SMTP → ligne failed + 502.
+   */
+  async sendEmail(
+    user: AppUser,
+    id: string,
+    dto: SendLeadEmailDto,
+  ): Promise<LeadEmailMessage> {
+    assertCanAccessLeads(user);
+    const { item: lead } = await this.clickup.getLeadById(user, id);
+
+    const toEmail = String(lead.email ?? '').trim().toLowerCase();
+    if (!toEmail) {
+      throw new BadRequestException({
+        message: 'Ce lead n’a pas d’adresse email.',
+      });
+    }
+
+    const subject = String(dto.subject ?? '').trim();
+    const bodyHtmlRaw = String(dto.bodyHtml ?? '').trim();
+    const bodyTextRaw = String(dto.bodyText ?? '').trim();
+    if (!subject) {
+      throw new BadRequestException({ message: 'subject requis' });
+    }
+    if (!bodyHtmlRaw && !bodyTextRaw) {
+      throw new BadRequestException({
+        message: 'bodyHtml ou bodyText requis.',
+      });
+    }
+
+    const bodyText = bodyTextRaw || stripHtml(bodyHtmlRaw);
+    const bodyHtml =
+      bodyHtmlRaw ||
+      `<p>${escapeHtml(bodyText).replace(/\n/g, '<br/>')}</p>`;
+
+    const { transporter, fromEmail, fromName } =
+      await this.userMailer.getTransporterForUser(user.id);
+
+    const now = new Date().toISOString();
+    try {
+      const info = await transporter.sendMail({
+        from: formatFrom(fromName, fromEmail),
+        to: toEmail,
+        subject,
+        html: bodyHtml,
+        text: bodyText,
+      });
+      const messageId = info.messageId ? String(info.messageId) : null;
+      return await this.insertEmailMessage({
+        leadId: lead.id,
+        userId: user.id,
+        fromEmail,
+        toEmail,
+        subject,
+        bodyHtml,
+        bodyText,
+        messageId,
+        status: 'sent',
+        error: null,
+        sentAt: now,
+      });
+    } catch (err) {
+      if (err instanceof BadRequestException || err instanceof ConflictException) {
+        throw err;
+      }
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn(
+        `Lead email send failed lead=${lead.id} user=${user.id}: ${message}`,
+      );
+      await this.insertEmailMessage({
+        leadId: lead.id,
+        userId: user.id,
+        fromEmail,
+        toEmail,
+        subject,
+        bodyHtml,
+        bodyText,
+        messageId: null,
+        status: 'failed',
+        error: message,
+        sentAt: null,
+      }).catch((persistErr: unknown) => {
+        const persistMsg =
+          persistErr instanceof Error ? persistErr.message : String(persistErr);
+        this.logger.warn(
+          `Lead email failed-row persist error lead=${lead.id}: ${persistMsg}`,
+        );
+      });
+      throw new BadGatewayException({ message });
+    }
+  }
+
+  private async insertEmailMessage(input: {
+    leadId: string;
+    userId: string;
+    fromEmail: string;
+    toEmail: string;
+    subject: string;
+    bodyHtml: string;
+    bodyText: string;
+    messageId: string | null;
+    status: 'sent' | 'failed';
+    error: string | null;
+    sentAt: string | null;
+  }): Promise<LeadEmailMessage> {
+    const { data, error } = await this.supabase
+      .getClient()
+      .from('email_messages')
+      .insert({
+        lead_id: input.leadId,
+        user_id: input.userId,
+        direction: 'outbound',
+        from_email: input.fromEmail,
+        to_email: input.toEmail,
+        subject: input.subject,
+        body_html: input.bodyHtml,
+        body_text: input.bodyText,
+        message_id: input.messageId,
+        status: input.status,
+        error: input.error,
+        sent_at: input.sentAt,
+      })
+      .select(EMAIL_MESSAGE_SELECT)
+      .single();
+
+    if (error || !data) {
+      throw new ConflictException({
+        message: error?.message ?? 'Enregistrement de l’email impossible',
+      });
+    }
+    return mapEmail(data as LeadEmailRow);
   }
 }

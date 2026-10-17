@@ -16,6 +16,7 @@ import { AuthGuard } from '@nestjs/passport';
 import type { AppUser } from '../auth/types/app-user';
 import { ClickupService } from '../clickup/clickup.service';
 import { LeadsStatsOverviewQueryDto } from './dto/leads-stats-overview-query.dto';
+import { SendLeadEmailDto } from './dto/send-lead-email.dto';
 import { SendLeadWhatsappTemplateDto } from './dto/send-lead-whatsapp-template.dto';
 import { LeadsService } from './leads.service';
 
@@ -78,6 +79,23 @@ export class LeadsController {
   @Get(':id/whatsapp-thread')
   getWhatsappThread(@Req() req: { user: AppUser }, @Param('id') id: string) {
     return this.leads.getWhatsappThread(req.user, id);
+  }
+
+  /** Fil email du lead (boîte perso + futurs inbound). */
+  @Get(':id/emails')
+  listEmails(@Req() req: { user: AppUser }, @Param('id') id: string) {
+    return this.leads.listEmails(req.user, id);
+  }
+
+  /** Envoi depuis la boîte SMTP de l’utilisateur connecté. */
+  @Post(':id/email')
+  @HttpCode(HttpStatus.OK)
+  sendEmail(
+    @Req() req: { user: AppUser },
+    @Param('id') id: string,
+    @Body() dto: SendLeadEmailDto,
+  ) {
+    return this.leads.sendEmail(req.user, id, dto);
   }
 
   /** Envoi template Meta au lead — persisté dans whatsapp_messages. */
