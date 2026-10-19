@@ -9,12 +9,14 @@ import {
   Post,
   Query,
   Req,
+  StreamableFile,
   UseGuards,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import type { AppUser } from '../auth/types/app-user';
 import {
   ListMailboxMessagesQueryDto,
+  MailboxAttachmentQueryDto,
   MailboxFolderQueryDto,
   MarkSeenDto,
   ReplyMailboxDto,
@@ -50,6 +52,25 @@ export class MailboxController {
   @HttpCode(HttpStatus.OK)
   send(@Req() req: { user: AppUser }, @Body() dto: SendMailboxDto) {
     return this.mailbox.send(req.user.id, dto);
+  }
+
+  @Get('messages/:uid/attachment')
+  async downloadAttachment(
+    @Req() req: { user: AppUser },
+    @Param('uid', ParseIntPipe) uid: number,
+    @Query() query: MailboxAttachmentQueryDto,
+  ): Promise<StreamableFile> {
+    const file = await this.mailbox.getAttachment(
+      req.user.id,
+      query.folder || 'INBOX',
+      uid,
+      query.index,
+    );
+    return new StreamableFile(file.content, {
+      type: file.contentType,
+      disposition: `attachment; filename="${file.filename}"`,
+      length: file.content.length,
+    });
   }
 
   @Get('messages/:uid')

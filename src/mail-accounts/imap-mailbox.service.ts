@@ -36,6 +36,8 @@ const MailComposer = nodeRequire('nodemailer/lib/mail-composer') as new (
 const CONNECT_TIMEOUT_MS = 20_000;
 const OP_TIMEOUT_MS = 40_000;
 const SNIPPET_LEN = 140;
+const INLINE_IMAGE_CAP_BYTES = 5 * 1024 * 1024;
+const OUTGOING_ATTACHMENT_CAP_BYTES = 20 * 1024 * 1024;
 
 export type MailFolderItem = {
   path: string;
@@ -65,6 +67,21 @@ export type MailAttachmentMeta = {
   filename: string;
   contentType: string;
   size: number;
+  index: number;
+  contentId: string | null;
+  isInline: boolean;
+};
+
+export type MailAttachmentFile = {
+  filename: string;
+  contentType: string;
+  content: Buffer;
+};
+
+export type MailOutgoingAttachment = {
+  filename: string;
+  contentType: string;
+  contentBase64: string;
 };
 
 export type MailMessageDetail = {
@@ -165,8 +182,40 @@ export class ImapMailboxService {
       if (!msg || !msg.source) {
         throw new NotFoundException({ message: 'Message introuvable.' });
       }
-      const parsed = await simpleParser(msg.source);
+      const parsed = await simpleParser(msg.source, { keepCidLinks: true });
       return this.mapDetail(uid, parsed);
+    });
+  }
+
+  async getAttachment(
+    userId: string,
+    folder: string,
+    uid: number,
+    index: number,
+  ): Promise<MailAttachmentFile> {
+    this.assertUid(uid);
+    if (!Number.isInteger(index) || index < 0) {
+      throw new NotFoundException({ message: 'Pièce jointe introuvable.' });
+    }
+    const mailbox = (folder || 'INBOX').trim() || 'INBOX';
+
+    return this.withClient(userId, async (client) => {
+      await client.mailboxOpen(mailbox, { readOnly: true });
+      const msg = await client.fetchOne(String(uid), { source: true }, { uid: true });
+      if (!msg || !msg.source) {
+        throw new NotFoundException({ message: 'Message introuvable.' });
+      }
+      const parsed = await simpleParser(msg.source);
+      const part = parsed.attachments?.[index];
+      const content = asBuffer(part?.content);
+      if (!part || !content) {
+        throw new NotFoundException({ message: 'Pièce jointe introuvable.' });
+      }
+      return {
+        filename: headerFilename(part.filename),
+        contentType: headerToken(part.contentType || 'application/octet-stream'),
+        content,
+      };
     });
   }
 
@@ -189,7 +238,13 @@ export class ImapMailboxService {
 
   async send(
     userId: string,
-    input: { to: string; subject: string; bodyHtml?: string; bodyText?: string },
+    input: {
+      to: string;
+      subject: string;
+      bodyHtml?: string;
+      bodyText?: string;
+      attachments?: MailOutgoingAttachment[];
+    },
   ): Promise<MailSendResult> {
     const toList = splitAddresses(input.to);
     if (toList.length === 0) {
@@ -200,6 +255,7 @@ export class ImapMailboxService {
       throw new BadRequestException({ message: 'subject requis' });
     }
     const bodies = resolveBodies(input.bodyHtml, input.bodyText);
+    const attachments = mapOutgoingAttachments(input.attachments);
 
     const { transporter, fromEmail, fromName } =
       await this.userMailer.getTransporterForUser(userId);
@@ -210,6 +266,7 @@ export class ImapMailboxService {
       subject,
       html: bodies.html,
       text: bodies.text,
+      ...(attachments ? { attachments } : {}),
     });
 
     let messageId: string | null = null;
@@ -233,10 +290,15 @@ export class ImapMailboxService {
     userId: string,
     folder: string,
     uid: number,
-    input: { bodyHtml?: string; bodyText?: string },
+    input: {
+      bodyHtml?: string;
+      bodyText?: string;
+      attachments?: MailOutgoingAttachment[];
+    },
   ): Promise<MailSendResult> {
     this.assertUid(uid);
     const bodies = resolveBodies(input.bodyHtml, input.bodyText);
+    const attachments = mapOutgoingAttachments(input.attachments);
     const mailbox = (folder || 'INBOX').trim() || 'INBOX';
 
     const original = await this.withClient(userId, async (client) => {
@@ -286,6 +348,7 @@ export class ImapMailboxService {
       html: bodies.html,
       text: bodies.text,
       headers: Object.keys(headers).length ? headers : undefined,
+      ...(attachments ? { attachments } : {}),
     });
 
     let messageId: string | null = null;
@@ -448,7 +511,8 @@ export class ImapMailboxService {
   }
 
   private mapDetail(uid: number, parsed: ParsedMail): MailMessageDetail {
-    const html =
+    const parts = parsed.attachments ?? [];
+    const rawHtml =
       typeof parsed.html === 'string' && parsed.html.trim()
         ? parsed.html
         : null;
@@ -461,12 +525,15 @@ export class ImapMailboxService {
       cc: addressText(parsed.cc),
       subject: parsed.subject?.trim() || '',
       date: parsed.date ? parsed.date.toISOString() : null,
-      html,
+      html: rawHtml ? inlineCidImages(rawHtml, parts) : null,
       text,
-      attachments: (parsed.attachments ?? []).map((a) => ({
-        filename: a.filename || 'piece-jointe',
-        contentType: a.contentType || 'application/octet-stream',
-        size: typeof a.size === 'number' ? a.size : a.content?.length ?? 0,
+      attachments: parts.map((part, index) => ({
+        filename: part.filename || 'piece-jointe',
+        contentType: part.contentType || 'application/octet-stream',
+        size: attachmentByteSize(part),
+        index,
+        contentId: normalizeCid(part.cid || part.contentId) || null,
+        isInline: isInlinePart(part),
       })),
     };
   }
@@ -620,4 +687,112 @@ function headerValue(buf: Buffer | undefined, name: string): string {
   const re = new RegExp(`^${name}:\\s*([\\s\\S]*?)(?=\\r?\\n\\S|$)`, 'im');
   const match = text.match(re);
   return match ? match[1].replace(/\s+/g, ' ').trim() : '';
+}
+
+type ParsedAttachment = NonNullable<ParsedMail['attachments']>[number];
+
+function asBuffer(content: unknown): Buffer | null {
+  if (Buffer.isBuffer(content)) return content;
+  if (content instanceof Uint8Array) return Buffer.from(content);
+  if (typeof content === 'string' && content.length > 0) return Buffer.from(content);
+  return null;
+}
+
+function normalizeCid(raw: string | undefined): string {
+  return (raw ?? '').replace(/^<|>$/g, '').trim();
+}
+
+function isInlinePart(part: ParsedAttachment): boolean {
+  const disp = (part.contentDisposition || '').toLowerCase();
+  if (disp === 'inline' || disp.startsWith('inline;')) return true;
+  return normalizeCid(part.cid || part.contentId).length > 0;
+}
+
+function isImagePart(part: ParsedAttachment): boolean {
+  return (part.contentType || '').toLowerCase().startsWith('image/');
+}
+
+function attachmentByteSize(part: ParsedAttachment): number {
+  if (typeof part.size === 'number' && part.size > 0) return part.size;
+  return asBuffer(part.content)?.length ?? 0;
+}
+
+function inlineCidImages(html: string, parts: ParsedAttachment[]): string {
+  let used = 0;
+  let out = html;
+  const ordered = parts
+    .map((part) => ({
+      part,
+      cid: normalizeCid(part.cid || part.contentId),
+    }))
+    .filter(
+      (item) => item.cid && isInlinePart(item.part) && isImagePart(item.part),
+    )
+    .sort((a, b) => b.cid.length - a.cid.length);
+
+  for (const { part, cid } of ordered) {
+    const buf = asBuffer(part.content);
+    const size = buf?.length ?? 0;
+    if (!buf || size <= 0 || used + size > INLINE_IMAGE_CAP_BYTES) continue;
+    const mime =
+      (part.contentType || 'image/png').split(';')[0]?.trim() || 'image/png';
+    const dataUri = `data:${mime};base64,${buf.toString('base64')}`;
+    const next = replaceCidSrc(out, cid, dataUri);
+    if (next === out) continue;
+    out = next;
+    used += size;
+  }
+  return out;
+}
+
+function replaceCidSrc(html: string, cid: string, dataUri: string): string {
+  const re = new RegExp(`(src\\s*=\\s*["']?)cid:${escapeRegExp(cid)}`, 'gi');
+  return html.replace(re, `$1${dataUri}`);
+}
+
+function mapOutgoingAttachments(
+  items: MailOutgoingAttachment[] | undefined,
+): Array<{ filename: string; contentType: string; content: Buffer }> | undefined {
+  if (!items || items.length === 0) return undefined;
+  let total = 0;
+  return items.map((item) => {
+    const content = decodeBase64(item.contentBase64);
+    total += content.length;
+    if (total > OUTGOING_ATTACHMENT_CAP_BYTES) {
+      throw new BadRequestException({
+        message: 'Pièces jointes trop volumineuses (maximum 20 Mo).',
+      });
+    }
+    return {
+      filename: item.filename.trim() || 'piece-jointe',
+      contentType: item.contentType.trim() || 'application/octet-stream',
+      content,
+    };
+  });
+}
+
+function decodeBase64(raw: string): Buffer {
+  const compact = raw.replace(/\s/g, '');
+  if (
+    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(
+      compact,
+    )
+  ) {
+    throw new BadRequestException({ message: 'contentBase64 invalide.' });
+  }
+  return Buffer.from(compact, 'base64');
+}
+
+function headerFilename(name: string | undefined): string {
+  const cleaned = (name || 'piece-jointe').replace(/[\r\n"]/g, '_').trim();
+  const ascii = cleaned.replace(/[^\x20-\x7E]/g, '_').trim();
+  return ascii || 'piece-jointe';
+}
+
+function headerToken(value: string): string {
+  return value.replace(/[\r\n]/g, '').trim() || 'application/octet-stream';
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

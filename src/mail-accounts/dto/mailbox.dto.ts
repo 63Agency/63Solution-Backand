@@ -1,5 +1,6 @@
 import { Type } from 'class-transformer';
 import {
+  IsArray,
   IsInt,
   IsNotEmpty,
   IsOptional,
@@ -7,6 +8,7 @@ import {
   Max,
   MaxLength,
   Min,
+  ValidateNested,
 } from 'class-validator';
 
 export class ListMailboxMessagesQueryDto {
@@ -39,6 +41,33 @@ export class MailboxFolderQueryDto {
   folder?: string;
 }
 
+export class MailboxAttachmentQueryDto {
+  @IsOptional()
+  @IsString()
+  folder?: string;
+
+  @Type(() => Number)
+  @IsInt({ message: 'index invalide' })
+  @Min(0, { message: 'index invalide' })
+  index!: number;
+}
+
+export class MailboxOutgoingAttachmentDto {
+  @IsString({ message: 'filename requis' })
+  @IsNotEmpty({ message: 'filename requis' })
+  @MaxLength(255)
+  filename!: string;
+
+  @IsString({ message: 'contentType requis' })
+  @IsNotEmpty({ message: 'contentType requis' })
+  @MaxLength(200)
+  contentType!: string;
+
+  @IsString({ message: 'contentBase64 requis' })
+  @IsNotEmpty({ message: 'contentBase64 requis' })
+  contentBase64!: string;
+}
+
 export class MarkSeenDto {
   @IsOptional()
   @IsString()
@@ -62,6 +91,12 @@ export class SendMailboxDto {
   @IsOptional()
   @IsString()
   bodyText?: string;
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => MailboxOutgoingAttachmentDto)
+  attachments?: MailboxOutgoingAttachmentDto[];
 }
 
 export class ReplyMailboxDto {
@@ -76,4 +111,10 @@ export class ReplyMailboxDto {
   @IsOptional()
   @IsString()
   bodyText?: string;
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => MailboxOutgoingAttachmentDto)
+  attachments?: MailboxOutgoingAttachmentDto[];
 }

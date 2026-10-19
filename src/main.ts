@@ -15,6 +15,8 @@ async function bootstrap() {
   });
   // socket.io partage le même port HTTP (pas d'IoAdapter custom requis).
   // Assets publics (logo signature email, etc.) — ex. /images/IMG_1260.JPEG
+  // Webmail send/reply: pièces jointes en base64 (plafond métier 20 Mo décodés).
+  app.useBodyParser('json', { limit: '32mb' });
   app.useStaticAssets(join(process.cwd(), 'public'), {
     prefix: '/',
   });
