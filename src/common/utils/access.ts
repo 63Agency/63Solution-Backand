@@ -77,6 +77,24 @@ function normalizeApiPath(path: string): string {
   return trimmed || '/';
 }
 
+/**
+ * Boîte personnelle + webmail IMAP.
+ * Ouvert à tout utilisateur authentifié (admin, admin_whatsapp, fixed_meeting).
+ * Accepte un préfixe /api éventuel.
+ */
+export function isPersonalMailboxPath(path: string): boolean {
+  let normalized = normalizeApiPath(path);
+  if (normalized === '/api' || normalized.startsWith('/api/')) {
+    normalized = normalized.slice(4) || '/';
+  }
+  return (
+    normalized === '/me/mail-account' ||
+    normalized.startsWith('/me/mail-account/') ||
+    normalized === '/me/mail' ||
+    normalized.startsWith('/me/mail/')
+  );
+}
+
 function isPathAllowed(
   method: string,
   path: string,
@@ -138,6 +156,9 @@ export function assertWhatsappAdminApiAccess(
   method: string,
   path: string,
 ): void {
+  // Boîte perso : tous les rôles, avant tout filtre de pages.
+  if (isPersonalMailboxPath(path)) return;
+
   // admin : aucun filtre d’API (GET/POST/DELETE /users, etc.).
   if (isFullAdmin(user.role) || !isWhatsappAdmin(user.role)) return;
 
@@ -153,6 +174,8 @@ export function assertFixedMeetingApiAccess(
   method: string,
   path: string,
 ): void {
+  if (isPersonalMailboxPath(path)) return;
+
   // admin : non restreint. fixed_meeting : calendrier uniquement (pas Users / WhatsApp / Leads).
   if (isFullAdmin(user.role) || !isFixedMeeting(user.role)) return;
 

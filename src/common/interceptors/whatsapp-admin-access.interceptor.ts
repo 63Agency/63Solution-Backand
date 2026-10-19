@@ -19,8 +19,9 @@ export class WhatsappAdminAccessInterceptor implements NestInterceptor {
   intercept(context: ExecutionContext, next: CallHandler): Observable<unknown> {
     const req = context.switchToHttp().getRequest<AuthedRequest>();
     if (req.user) {
-      assertWhatsappAdminApiAccess(req.user, req.method, req.path);
-      assertFixedMeetingApiAccess(req.user, req.method, req.path);
+      const path = req.originalUrl || req.url || req.path;
+      assertWhatsappAdminApiAccess(req.user, req.method, path);
+      assertFixedMeetingApiAccess(req.user, req.method, path);
     }
     return next.handle();
   }

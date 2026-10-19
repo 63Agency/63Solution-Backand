@@ -69,7 +69,7 @@ export class MailAccountsService {
     if (!row) {
       return { configured: false };
     }
-    return { configured: true, ...mapPublic(row) };
+    return { configured: true, account: mapPublic(row) };
   }
 
   async upsertMine(
@@ -129,7 +129,7 @@ export class MailAccountsService {
     this.logger.log(`Mail account upserted user=${user.id}`);
     return {
       configured: true,
-      ...mapPublic(data as UserMailAccountRow),
+      account: mapPublic(data as UserMailAccountRow),
     };
   }
 

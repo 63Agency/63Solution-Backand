@@ -36,7 +36,7 @@ export type UserMailAccountPublic = {
 };
 
 export type MailAccountGetResponse =
-  | ({ configured: true } & UserMailAccountPublic)
+  | { configured: true; account: UserMailAccountPublic }
   | { configured: false };
 
 export type MailProbeResult = {
