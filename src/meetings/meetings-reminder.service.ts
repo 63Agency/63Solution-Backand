@@ -816,7 +816,7 @@ export class MeetingsReminderService {
       if (event) {
         meetLink = event.meetLink;
         googleEventId = event.eventId;
-        meetSpace = null;
+        meetSpace = event.spaceName;
       } else {
         const space = await this.googleMeet.createSpace();
         if (space) {

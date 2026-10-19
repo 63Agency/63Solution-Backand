@@ -408,7 +408,7 @@ export class MeetingsService {
       if (event) {
         return {
           meetLink: event.meetLink,
-          meetSpace: null,
+          meetSpace: event.spaceName,
           googleEventId: event.eventId,
         };
       }
@@ -1455,7 +1455,8 @@ export class MeetingsService {
         const updated = await this.saveMeetLink(
           id,
           patched.meetLink,
-          existing.meet_space,
+          patched.spaceName ??
+            (existing.meet_space ? String(existing.meet_space) : null),
           googleEventId,
         );
         this.logger.log(
