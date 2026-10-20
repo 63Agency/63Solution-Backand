@@ -258,6 +258,22 @@ export class DevisService {
     };
   }
 
+  async updateStatus(id: string, status: string, user: AppUser) {
+    const row = await this.byIdOr404(id);
+    this.ensureOwnership(row, user);
+    const { data, error } = await this.supabase
+      .getClient()
+      .from('devis')
+      .update({ status, updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .select('id, status')
+      .single();
+    if (error || !data) {
+      throw new ConflictException({ message: error?.message ?? 'update statut refusé' });
+    }
+    return { id: String(data.id), status: String(data.status) };
+  }
+
   async patch(id: string, dto: UpsertDevisDto, user: AppUser) {
     const row = await this.byIdOr404(id);
     this.ensureOwnership(row, user);

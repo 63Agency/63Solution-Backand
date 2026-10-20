@@ -18,6 +18,7 @@ import { SendDocumentEmailDto } from '../common/dto/send-document-email.dto';
 import { FromDevisTransferDto } from '../factures/dto/from-devis-transfer.dto';
 import { FacturesService } from '../factures/factures.service';
 import { DevisService } from './devis.service';
+import { UpdateDevisStatusDto } from './dto/update-devis-status.dto';
 import { UpsertDevisDto } from './dto/upsert-devis.dto';
 
 @Controller('devis')
@@ -41,6 +42,15 @@ export class DevisController {
   @Get(':id')
   getById(@Param('id') id: string, @Req() req: { user: AppUser }) {
     return this.devisService.getById(id, req.user);
+  }
+
+  @Patch(':id/status')
+  updateStatus(
+    @Param('id') id: string,
+    @Body() dto: UpdateDevisStatusDto,
+    @Req() req: { user: AppUser },
+  ) {
+    return this.devisService.updateStatus(id, dto.status, req.user);
   }
 
   @Patch(':id')

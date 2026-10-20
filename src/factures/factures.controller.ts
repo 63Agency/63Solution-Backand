@@ -16,6 +16,7 @@ import type { Response } from 'express';
 import type { AppUser } from '../auth/types/app-user';
 import { SendDocumentEmailDto } from '../common/dto/send-document-email.dto';
 import { FromDevisTransferDto } from './dto/from-devis-transfer.dto';
+import { UpdateFactureStatusDto } from './dto/update-facture-status.dto';
 import { UpsertFactureDto } from './dto/upsert-facture.dto';
 import { FacturesService } from './factures.service';
 
@@ -46,6 +47,15 @@ export class FacturesController {
   @Get(':id')
   getById(@Param('id') id: string, @Req() req: { user: AppUser }) {
     return this.factures.getById(id, req.user);
+  }
+
+  @Patch(':id/status')
+  updateStatus(
+    @Param('id') id: string,
+    @Body() dto: UpdateFactureStatusDto,
+    @Req() req: { user: AppUser },
+  ) {
+    return this.factures.updateStatus(id, dto.status, req.user);
   }
 
   @Patch(':id')

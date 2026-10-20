@@ -484,6 +484,22 @@ export class FacturesService {
     };
   }
 
+  async updateStatus(id: string, status: string, user: AppUser) {
+    const row = await this.byIdOr404(id);
+    this.ensureOwnership(row, user);
+    const { data, error } = await this.supabase
+      .getClient()
+      .from('factures')
+      .update({ status, updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .select('id, status')
+      .single();
+    if (error || !data) {
+      throw new ConflictException({ message: error?.message ?? 'update statut refusé' });
+    }
+    return { id: String(data.id), status: String(data.status) };
+  }
+
   async patch(id: string, dto: UpsertFactureDto, user: AppUser) {
     const existingRow = await this.byIdOr404(id);
     this.ensureOwnership(existingRow, user);

@@ -17,6 +17,7 @@ import { AuthGuard } from '@nestjs/passport';
 import type { Response } from 'express';
 import type { AppUser } from '../auth/types/app-user';
 import { SendDocumentEmailDto } from '../common/dto/send-document-email.dto';
+import { UpdatePropositionStatusDto } from './dto/update-proposition-status.dto';
 import { UpsertPropositionDto } from './dto/upsert-proposition.dto';
 import { PropositionsService } from './propositions.service';
 
@@ -84,6 +85,15 @@ export class PropositionsController {
   @Get(':id')
   getById(@Param('id') id: string, @Req() req: { user: AppUser }) {
     return this.propositions.getById(id, req.user);
+  }
+
+  @Patch(':id/status')
+  updateStatus(
+    @Param('id') id: string,
+    @Body() dto: UpdatePropositionStatusDto,
+    @Req() req: { user: AppUser },
+  ) {
+    return this.propositions.updateStatus(id, dto.status, req.user);
   }
 
   @Patch(':id')
