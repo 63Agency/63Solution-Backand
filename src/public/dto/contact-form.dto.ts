@@ -17,36 +17,41 @@ export class ContactFormDto {
   @IsString({ message: 'name requis' })
   @MinLength(1, { message: 'name requis' })
   @MaxLength(200)
-  name: string;
+  name!: string;
 
   @IsEmail({}, { message: 'email invalide' })
   @MaxLength(200)
-  email: string;
+  email!: string;
 
   @IsString({ message: 'phone requis' })
   @MinLength(1, { message: 'phone requis' })
   @MaxLength(60)
-  phone: string;
+  phone!: string;
 
-  @IsString({ message: 'role requis' })
-  @MinLength(1, { message: 'role requis' })
+  /** Plus demandé par le formulaire : conservé si le site l’envoie encore. */
+  @IsOptional()
+  @Transform(({ value }) => emptyToUndefined(value))
+  @IsString()
   @MaxLength(200)
-  role: string;
+  role?: string;
 
-  @IsString({ message: 'objective requis' })
-  @MinLength(1, { message: 'objective requis' })
+  @IsOptional()
+  @Transform(({ value }) => emptyToUndefined(value))
+  @IsString()
   @MaxLength(500)
-  objective: string;
+  objective?: string;
 
-  @IsString({ message: 'campaigns requis' })
-  @MinLength(1, { message: 'campaigns requis' })
+  @IsOptional()
+  @Transform(({ value }) => emptyToUndefined(value))
+  @IsString()
   @MaxLength(500)
-  campaigns: string;
+  campaigns?: string;
 
-  @IsString({ message: 'sector requis' })
-  @MinLength(1, { message: 'sector requis' })
+  @IsOptional()
+  @Transform(({ value }) => emptyToUndefined(value))
+  @IsString()
   @MaxLength(200)
-  sector: string;
+  sector?: string;
 
   @IsOptional()
   @Transform(({ value }) => emptyToUndefined(value))
