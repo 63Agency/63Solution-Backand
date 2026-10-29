@@ -1,6 +1,7 @@
 /** Origines CORS partagées HTTP + WebSocket (socket.io). */
 export const CORS_ORIGINS = [
   'https://app.63agency.com',
+  'https://client.63agency.com',
   'https://63agency.com',
   'https://www.63agency.com',
   'http://localhost:3000',
