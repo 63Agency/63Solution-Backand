@@ -6,6 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import type { PortalClientUser } from '../client-auth/types/portal-client-user';
+import { PortalTasksService } from '../portal-tasks/portal-tasks.service';
 import { SupabaseService } from '../supabase/supabase.service';
 import type { CreateLeadDto } from './dto/create-lead.dto';
 import type { CreateLeadNoteDto } from './dto/create-lead-note.dto';
@@ -115,11 +116,20 @@ function actorFromUser(user: PortalClientUser): string {
   return 'client';
 }
 
+function endOfUtcDayIso(from = new Date()): string {
+  const d = new Date(from);
+  d.setUTCHours(23, 59, 59, 0);
+  return d.toISOString();
+}
+
 @Injectable()
 export class PortalLeadsService {
   private readonly logger = new Logger(PortalLeadsService.name);
 
-  constructor(private readonly supabase: SupabaseService) {}
+  constructor(
+    private readonly supabase: SupabaseService,
+    private readonly portalTasks: PortalTasksService,
+  ) {}
 
   private clientId(user: PortalClientUser): string {
     return user.clientId;
@@ -286,6 +296,18 @@ export class PortalLeadsService {
       actor: actorFromUser(user),
       message: 'Lead reçu',
       detail: lead.name,
+    });
+
+    // UI: nouveaux leads → tâche d'appel automatique (due aujourd’hui).
+    await this.portalTasks.tryCreateFromLead({
+      clientId,
+      leadId: lead.id,
+      pipelineId: lead.pipeline_id,
+      leadName: lead.name,
+      phone: lead.phone,
+      taskType: 'appel',
+      dueAt: endOfUtcDayIso(),
+      details: null,
     });
 
     return mapLead(lead);
@@ -482,7 +504,7 @@ export class PortalLeadsService {
     user: PortalClientUser,
   ) {
     const clientId = this.clientId(user);
-    await this.assertLeadOwned(leadId, clientId);
+    const lead = await this.assertLeadOwned(leadId, clientId);
 
     const actor = dto.actor?.trim() || actorFromUser(user);
     const details = dto.details?.trim() || null;
@@ -495,6 +517,18 @@ export class PortalLeadsService {
       actor,
       message,
       detail: details,
+    });
+
+    // Reminder → vraie tâche portail (même requête, scoped client_id).
+    await this.portalTasks.createFromLead({
+      clientId,
+      leadId: lead.id,
+      pipelineId: lead.pipeline_id,
+      leadName: lead.name,
+      phone: lead.phone,
+      taskType: dto.taskType,
+      dueAt: dto.dueAt,
+      details,
     });
 
     return mapActivity(row);
