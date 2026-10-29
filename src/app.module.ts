@@ -17,6 +17,7 @@ import { EmailModule } from './email/email.module';
 import { FacturesModule } from './factures/factures.module';
 import { MeetingsModule } from './meetings/meetings.module';
 import { PortalClientsModule } from './portal-clients/portal-clients.module';
+import { PortalPipelinesModule } from './portal-pipelines/portal-pipelines.module';
 import { PropositionsModule } from './propositions/propositions.module';
 import { SupabaseModule } from './supabase/supabase.module';
 import { NotificationsModule } from './notifications/notifications.module';
@@ -46,6 +47,7 @@ import { PublicModule } from './public/public.module';
     ClientsModule,
     PortalClientsModule,
     ClientAuthModule,
+    PortalPipelinesModule,
     DevisModule,
     EmailModule,
     FacturesModule,
