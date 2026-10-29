@@ -2,18 +2,25 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import type { PortalClientUser } from '../client-auth/types/portal-client-user';
 import { SupabaseService } from '../supabase/supabase.service';
 import type { CreateLeadDto } from './dto/create-lead.dto';
+import type { CreateLeadNoteDto } from './dto/create-lead-note.dto';
+import type { CreateLeadReminderDto } from './dto/create-lead-reminder.dto';
 import type { ListLeadsQueryDto } from './dto/list-leads-query.dto';
 import type { UpdateLeadDto } from './dto/update-lead.dto';
 import type { UpdateLeadOwnerDto } from './dto/update-lead-owner.dto';
 import type { UpdateLeadStageDto } from './dto/update-lead-stage.dto';
+import type { PortalLeadActivityKind } from './portal-lead-activity.kinds';
+import { stageLabel } from './portal-lead-activity.labels';
 
 const PORTAL_LEADS_TABLE = 'portal.leads';
 const PORTAL_PIPELINES_TABLE = 'portal.pipelines';
+const PORTAL_LEAD_NOTES_TABLE = 'portal.lead_notes';
+const PORTAL_LEAD_ACTIVITY_TABLE = 'portal.lead_activity';
 
 const LEAD_SELECT =
   'id, name, phone, email, campaign, owner, estimated_value, stage, pipeline_id, created_at';
@@ -28,6 +35,24 @@ type LeadRow = {
   estimated_value: string | number | null;
   stage: string;
   pipeline_id: string | null;
+  created_at: string;
+};
+
+type NoteRow = {
+  id: string;
+  lead_id: string;
+  author: string | null;
+  body: string;
+  created_at: string;
+};
+
+type ActivityRow = {
+  id: string;
+  lead_id: string;
+  kind: string;
+  actor: string | null;
+  message: string;
+  detail: string | null;
   created_at: string;
 };
 
@@ -54,14 +79,46 @@ function mapLead(r: LeadRow) {
   };
 }
 
+function mapNote(r: NoteRow) {
+  return {
+    id: String(r.id),
+    lead_id: String(r.lead_id),
+    author: r.author != null ? String(r.author) : null,
+    body: String(r.body ?? ''),
+    created_at: r.created_at,
+  };
+}
+
+function mapActivity(r: ActivityRow) {
+  return {
+    id: String(r.id),
+    lead_id: String(r.lead_id),
+    kind: String(r.kind),
+    actor: r.actor != null ? String(r.actor) : null,
+    message: String(r.message ?? ''),
+    detail: r.detail != null ? String(r.detail) : null,
+    created_at: r.created_at,
+  };
+}
+
 function cleanOptional(value: string | undefined): string | null {
   if (value === undefined) return null;
   const t = value.trim();
   return t.length > 0 ? t : null;
 }
 
+function actorFromUser(user: PortalClientUser): string {
+  const company = user.companyName?.trim();
+  if (company) return company;
+  const email = user.email?.trim();
+  if (email) return email;
+  return 'client';
+}
+
 @Injectable()
 export class PortalLeadsService {
+  private readonly logger = new Logger(PortalLeadsService.name);
+
   constructor(private readonly supabase: SupabaseService) {}
 
   private clientId(user: PortalClientUser): string {
@@ -87,6 +144,72 @@ export class PortalLeadsService {
       throw new NotFoundException({
         message: 'Pipeline introuvable.',
       });
+    }
+  }
+
+  /** Lead doit appartenir au client JWT — sinon 404. */
+  private async assertLeadOwned(
+    leadId: string,
+    clientId: string,
+  ): Promise<LeadRow> {
+    const { data, error } = await this.supabase
+      .getClient()
+      .from(PORTAL_LEADS_TABLE)
+      .select(LEAD_SELECT)
+      .eq('id', leadId)
+      .eq('client_id', clientId)
+      .maybeSingle();
+
+    if (error) {
+      throw new ConflictException({ message: error.message });
+    }
+    if (!data) {
+      throw new NotFoundException({ message: 'Lead introuvable.' });
+    }
+    return data as LeadRow;
+  }
+
+  private async insertActivity(input: {
+    clientId: string;
+    leadId: string;
+    kind: PortalLeadActivityKind;
+    actor: string | null;
+    message: string;
+    detail?: string | null;
+  }): Promise<ActivityRow> {
+    const { data, error } = await this.supabase
+      .getClient()
+      .from(PORTAL_LEAD_ACTIVITY_TABLE)
+      .insert({
+        client_id: input.clientId,
+        lead_id: input.leadId,
+        kind: input.kind,
+        actor: input.actor,
+        message: input.message,
+        detail: input.detail ?? null,
+      })
+      .select('id, lead_id, kind, actor, message, detail, created_at')
+      .single();
+
+    if (error || !data) {
+      throw new ConflictException({
+        message: error?.message ?? 'Impossible d’enregistrer l’activité.',
+      });
+    }
+    return data as ActivityRow;
+  }
+
+  /** Side-effect logging — ne doit pas casser le retour lead existant. */
+  private async tryInsertActivity(
+    input: Parameters<PortalLeadsService['insertActivity']>[0],
+  ): Promise<void> {
+    try {
+      await this.insertActivity(input);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger.warn(
+        `lead_activity ${input.kind} lead=${input.leadId}: ${msg}`,
+      );
     }
   }
 
@@ -155,7 +278,17 @@ export class PortalLeadsService {
       });
     }
 
-    return mapLead(data as LeadRow);
+    const lead = data as LeadRow;
+    await this.tryInsertActivity({
+      clientId,
+      leadId: lead.id,
+      kind: 'received',
+      actor: actorFromUser(user),
+      message: 'Lead reçu',
+      detail: lead.name,
+    });
+
+    return mapLead(lead);
   }
 
   async update(id: string, dto: UpdateLeadDto, user: PortalClientUser) {
@@ -192,10 +325,27 @@ export class PortalLeadsService {
     user: PortalClientUser,
   ) {
     const clientId = this.clientId(user);
-    return this.updateOwned(id, clientId, {
-      stage: dto.stage,
+    const existing = await this.assertLeadOwned(id, clientId);
+    const fromStage = existing.stage;
+    const toStage = dto.stage;
+
+    const mapped = await this.updateOwned(id, clientId, {
+      stage: toStage,
       updated_at: new Date().toISOString(),
     });
+
+    if (fromStage !== toStage) {
+      await this.tryInsertActivity({
+        clientId,
+        leadId: id,
+        kind: 'stage_change',
+        actor: actorFromUser(user),
+        message: `${stageLabel(fromStage)} -> ${stageLabel(toStage)}`,
+        detail: `${fromStage}->${toStage}`,
+      });
+    }
+
+    return mapped;
   }
 
   async updateOwner(
@@ -204,11 +354,27 @@ export class PortalLeadsService {
     user: PortalClientUser,
   ) {
     const clientId = this.clientId(user);
+    const existing = await this.assertLeadOwned(id, clientId);
     const owner = dto.owner.trim();
-    return this.updateOwned(id, clientId, {
-      owner: owner.length > 0 ? owner : null,
+    const nextOwner = owner.length > 0 ? owner : null;
+
+    const mapped = await this.updateOwned(id, clientId, {
+      owner: nextOwner,
       updated_at: new Date().toISOString(),
     });
+
+    const prev = existing.owner?.trim() || '—';
+    const next = nextOwner?.trim() || '—';
+    await this.tryInsertActivity({
+      clientId,
+      leadId: id,
+      kind: 'owner_change',
+      actor: actorFromUser(user),
+      message: `Propriétaire: ${prev} -> ${next}`,
+      detail: nextOwner,
+    });
+
+    return mapped;
   }
 
   async remove(id: string, user: PortalClientUser): Promise<void> {
@@ -229,6 +395,109 @@ export class PortalLeadsService {
     if (!data) {
       throw new NotFoundException({ message: 'Lead introuvable.' });
     }
+  }
+
+  async listNotes(leadId: string, user: PortalClientUser) {
+    const clientId = this.clientId(user);
+    await this.assertLeadOwned(leadId, clientId);
+
+    const { data, error } = await this.supabase
+      .getClient()
+      .from(PORTAL_LEAD_NOTES_TABLE)
+      .select('id, lead_id, author, body, created_at')
+      .eq('client_id', clientId)
+      .eq('lead_id', leadId)
+      .order('created_at', { ascending: true });
+
+    if (error) {
+      throw new ConflictException({ message: error.message });
+    }
+
+    return ((data ?? []) as NoteRow[]).map(mapNote);
+  }
+
+  async createNote(
+    leadId: string,
+    dto: CreateLeadNoteDto,
+    user: PortalClientUser,
+  ) {
+    const clientId = this.clientId(user);
+    await this.assertLeadOwned(leadId, clientId);
+
+    const author = actorFromUser(user);
+    const body = dto.body.trim();
+
+    const { data, error } = await this.supabase
+      .getClient()
+      .from(PORTAL_LEAD_NOTES_TABLE)
+      .insert({
+        client_id: clientId,
+        lead_id: leadId,
+        author,
+        body,
+      })
+      .select('id, lead_id, author, body, created_at')
+      .single();
+
+    if (error || !data) {
+      throw new ConflictException({
+        message: error?.message ?? 'Impossible de créer la note.',
+      });
+    }
+
+    await this.insertActivity({
+      clientId,
+      leadId,
+      kind: 'note',
+      actor: author,
+      message: 'Note ajoutée',
+      detail: body.length > 200 ? `${body.slice(0, 200)}…` : body,
+    });
+
+    return mapNote(data as NoteRow);
+  }
+
+  async listActivity(leadId: string, user: PortalClientUser) {
+    const clientId = this.clientId(user);
+    await this.assertLeadOwned(leadId, clientId);
+
+    const { data, error } = await this.supabase
+      .getClient()
+      .from(PORTAL_LEAD_ACTIVITY_TABLE)
+      .select('id, lead_id, kind, actor, message, detail, created_at')
+      .eq('client_id', clientId)
+      .eq('lead_id', leadId)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      throw new ConflictException({ message: error.message });
+    }
+
+    return ((data ?? []) as ActivityRow[]).map(mapActivity);
+  }
+
+  async createReminder(
+    leadId: string,
+    dto: CreateLeadReminderDto,
+    user: PortalClientUser,
+  ) {
+    const clientId = this.clientId(user);
+    await this.assertLeadOwned(leadId, clientId);
+
+    const actor = dto.actor?.trim() || actorFromUser(user);
+    const details = dto.details?.trim() || null;
+    const message = `Rappel ${dto.taskType} prévu le ${dto.dueAt}`;
+
+    const row = await this.insertActivity({
+      clientId,
+      leadId,
+      kind: 'reminder',
+      actor,
+      message,
+      detail: details,
+    });
+
+    return mapActivity(row);
   }
 
   private async updateOwned(
