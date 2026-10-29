@@ -11,10 +11,12 @@ import { ClickupModule } from './clickup/clickup.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { CloudinaryModule } from './cloudinary/cloudinary.module';
 import { ClientsModule } from './clients/clients.module';
+import { ClientAuthModule } from './client-auth/client-auth.module';
 import { DevisModule } from './devis/devis.module';
 import { EmailModule } from './email/email.module';
 import { FacturesModule } from './factures/factures.module';
 import { MeetingsModule } from './meetings/meetings.module';
+import { PortalClientsModule } from './portal-clients/portal-clients.module';
 import { PropositionsModule } from './propositions/propositions.module';
 import { SupabaseModule } from './supabase/supabase.module';
 import { NotificationsModule } from './notifications/notifications.module';
@@ -42,6 +44,8 @@ import { PublicModule } from './public/public.module';
     ClickupModule,
     CloudinaryModule,
     ClientsModule,
+    PortalClientsModule,
+    ClientAuthModule,
     DevisModule,
     EmailModule,
     FacturesModule,

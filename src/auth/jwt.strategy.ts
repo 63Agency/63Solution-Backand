@@ -27,7 +27,15 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     });
   }
 
-  async validate(payload: { sub: string }): Promise<AppUser> {
+  async validate(payload: {
+    sub: string;
+    role?: string;
+  }): Promise<AppUser> {
+    // Token portail client : jamais accepté comme session CRM interne.
+    if (String(payload.role ?? '').trim().toLowerCase() === 'client') {
+      throw new UnauthorizedException();
+    }
+
     const { data, error } = await this.supabase
       .getClient()
       .from('users')

@@ -36,8 +36,16 @@ export function normalizeApiRole(
   return 'admin_whatsapp';
 }
 
+/** Rôle JWT portail client — jamais un rôle CRM. */
+export function isPortalClientRole(
+  role: string | null | undefined,
+): boolean {
+  return String(role ?? '').trim().toLowerCase() === 'client';
+}
+
 /** Administrateur complet (dashboard, clients, factures, gestion users). */
 export function isFullAdmin(role: string | null | undefined): boolean {
+  if (isPortalClientRole(role)) return false;
   return normalizeApiRole(role) === 'admin';
 }
 
@@ -47,14 +55,17 @@ export function isAdminRole(role: string | null | undefined): boolean {
 }
 
 export function isWhatsappAdmin(role: string | null | undefined): boolean {
+  if (isPortalClientRole(role)) return false;
   return normalizeApiRole(role) === 'admin_whatsapp';
 }
 
 export function isFixedMeeting(role: string | null | undefined): boolean {
+  if (isPortalClientRole(role)) return false;
   return normalizeApiRole(role) === 'fixed_meeting';
 }
 
 export function canAccessWhatsapp(role: string | null | undefined): boolean {
+  if (isPortalClientRole(role)) return false;
   const r = normalizeApiRole(role);
   return r === 'admin' || r === 'admin_whatsapp';
 }
@@ -65,6 +76,7 @@ export function canAccessLeads(role: string | null | undefined): boolean {
 
 /** Calendrier / meetings : admin + admin_whatsapp + fixed_meeting. */
 export function canAccessMeetings(role: string | null | undefined): boolean {
+  if (isPortalClientRole(role)) return false;
   const r = normalizeApiRole(role);
   return r === 'admin' || r === 'admin_whatsapp' || r === 'fixed_meeting';
 }
@@ -73,6 +85,7 @@ export function canAccessMeetings(role: string | null | undefined): boolean {
 export function canAssignMeetingUsers(
   role: string | null | undefined,
 ): boolean {
+  if (isPortalClientRole(role)) return false;
   const r = normalizeApiRole(role);
   return r === 'admin' || r === 'admin_whatsapp';
 }

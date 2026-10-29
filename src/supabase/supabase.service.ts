@@ -117,6 +117,18 @@ function quoteIdent(name: string): string {
   return `"${name}"`;
 }
 
+/** Table name, optionally schema-qualified (`portal.clients` → `"portal"."clients"`). */
+function quoteTable(name: string): string {
+  const parts = name.split('.');
+  if (parts.length === 1) {
+    return quoteIdent(parts[0]);
+  }
+  if (parts.length === 2 && parts[0] && parts[1]) {
+    return `${quoteIdent(parts[0])}.${quoteIdent(parts[1])}`;
+  }
+  throw new Error(`Identifiant de table SQL invalide: ${name}`);
+}
+
 function parseSelectColumns(columns?: string): string {
   if (!columns || columns.trim() === '' || columns.trim() === '*') {
     return '*';
@@ -166,8 +178,8 @@ class QueryBuilder implements PromiseLike<PgQueryResult> {
     private readonly pool: Pool,
     private readonly table: string,
   ) {
-    // Validate table name early
-    quoteIdent(table);
+    // Validate table name early (supports schema.table for portal isolation)
+    quoteTable(table);
   }
 
   // ─── SELECT ─────────────────────────────────────────────
@@ -513,7 +525,7 @@ class QueryBuilder implements PromiseLike<PgQueryResult> {
   }
 
   private async execSelect(): Promise<PgQueryResult> {
-    const table = quoteIdent(this.table);
+    const table = quoteTable(this.table);
     const params: unknown[] = [];
     const where = this.buildWhere(params);
 
@@ -546,7 +558,7 @@ class QueryBuilder implements PromiseLike<PgQueryResult> {
     const cols = Object.keys(rows[0]);
     for (const c of cols) quoteIdent(c);
 
-    const table = quoteIdent(this.table);
+    const table = quoteTable(this.table);
     const colList = cols.map(quoteIdent).join(', ');
     const params: unknown[] = [];
     const valueGroups: string[] = [];
@@ -575,7 +587,7 @@ class QueryBuilder implements PromiseLike<PgQueryResult> {
         count: null,
       };
     }
-    const table = quoteIdent(this.table);
+    const table = quoteTable(this.table);
     const params: unknown[] = [];
     const sets: string[] = [];
     for (const [k, v] of Object.entries(this.updatePatch)) {
@@ -604,7 +616,7 @@ class QueryBuilder implements PromiseLike<PgQueryResult> {
       .filter(Boolean);
     for (const c of conflictCols) quoteIdent(c);
 
-    const table = quoteIdent(this.table);
+    const table = quoteTable(this.table);
     const colList = cols.map(quoteIdent).join(', ');
     const params: unknown[] = [];
     const valueGroups: string[] = [];
@@ -640,7 +652,7 @@ class QueryBuilder implements PromiseLike<PgQueryResult> {
   }
 
   private async execDelete(): Promise<PgQueryResult> {
-    const table = quoteIdent(this.table);
+    const table = quoteTable(this.table);
     const params: unknown[] = [];
     const where = this.buildWhere(params);
     const returning = this.returningCols || '*';

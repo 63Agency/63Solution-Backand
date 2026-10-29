@@ -1,10 +1,10 @@
 import { Transform } from 'class-transformer';
 import {
   IsEmail,
+  IsNotEmpty,
   IsOptional,
   IsString,
   MaxLength,
-  MinLength,
 } from 'class-validator';
 
 function emptyToUndefined(v: unknown): unknown {
@@ -15,18 +15,19 @@ function emptyToUndefined(v: unknown): unknown {
 /** Corps POST /public/contact (site vitrine). */
 export class ContactFormDto {
   @IsString({ message: 'name requis' })
-  @MinLength(1, { message: 'name requis' })
+  @IsNotEmpty({ message: 'name requis' })
   @MaxLength(200)
   name!: string;
 
   @IsEmail({}, { message: 'email invalide' })
-  @MaxLength(200)
   email!: string;
 
-  @IsString({ message: 'phone requis' })
-  @MinLength(1, { message: 'phone requis' })
-  @MaxLength(60)
-  phone!: string;
+  /** Optionnel — le service n’exige que name + email. */
+  @IsOptional()
+  @Transform(({ value }) => emptyToUndefined(value))
+  @IsString({ message: 'phone invalide' })
+  @MaxLength(60, { message: 'phone max 60 caractères' })
+  phone?: string;
 
   /** Plus demandé par le formulaire : conservé si le site l’envoie encore. */
   @IsOptional()
