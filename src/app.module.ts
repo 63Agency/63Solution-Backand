@@ -20,6 +20,7 @@ import { PortalClientsModule } from './portal-clients/portal-clients.module';
 import { PortalLeadsModule } from './portal-leads/portal-leads.module';
 import { PortalPipelinesModule } from './portal-pipelines/portal-pipelines.module';
 import { PortalTasksModule } from './portal-tasks/portal-tasks.module';
+import { PortalTeamModule } from './portal-team/portal-team.module';
 import { PropositionsModule } from './propositions/propositions.module';
 import { SupabaseModule } from './supabase/supabase.module';
 import { NotificationsModule } from './notifications/notifications.module';
@@ -52,6 +53,7 @@ import { PublicModule } from './public/public.module';
     PortalPipelinesModule,
     PortalLeadsModule,
     PortalTasksModule,
+    PortalTeamModule,
     DevisModule,
     EmailModule,
     FacturesModule,
