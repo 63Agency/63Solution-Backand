@@ -18,6 +18,7 @@ import { FacturesModule } from './factures/factures.module';
 import { MeetingsModule } from './meetings/meetings.module';
 import { PortalClientsModule } from './portal-clients/portal-clients.module';
 import { PortalLeadsModule } from './portal-leads/portal-leads.module';
+import { PortalMetaModule } from './portal-meta/portal-meta.module';
 import { PortalPipelinesModule } from './portal-pipelines/portal-pipelines.module';
 import { PortalStatsModule } from './portal-stats/portal-stats.module';
 import { PortalTasksModule } from './portal-tasks/portal-tasks.module';
@@ -56,6 +57,7 @@ import { PublicModule } from './public/public.module';
     PortalTasksModule,
     PortalTeamModule,
     PortalStatsModule,
+    PortalMetaModule,
     DevisModule,
     EmailModule,
     FacturesModule,
