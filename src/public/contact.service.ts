@@ -20,9 +20,13 @@ const AD_PLATFORM_CF_ID = 'cf2b54ee-4d92-4bf8-9517-8cc6525a264f'; // utm_source
 const CAMPAIGN_CF_ID = '7c7ab555-8bb2-48b6-9267-2f967a57e9a2'; // utm_campaign
 const MEDIUM_CF_ID = '86592919-88b5-4128-b5ca-492d8c9f94bb'; // utm_medium
 
-/** ClickUp "🎯 Source" — lead origin (website form), not ad platform. */
+/**
+ * ClickUp "🎯 Source" — DROPDOWN (not text).
+ * Value must be option index (number) or option UUID — never a label string.
+ * Index 6 = "Website" (verified pre-existing payload for /public/contact).
+ */
 const SOURCE_CF_ID = 'ce16924f-be03-463f-a368-93d6051004b8';
-const SOURCE_WEBSITE_VALUE = 'Website';
+const SOURCE_WEBSITE_OPTION_INDEX = 6;
 
 const CUSTOM_FIELD_IDS = {
   email: 'cf170d1a-077f-4912-ae5a-9d1609af4cf3',
@@ -237,10 +241,10 @@ export class ContactService {
       [CUSTOM_FIELD_IDS.city, fields.city || null],
       [CUSTOM_FIELD_IDS.budget, fields.budget || null],
       [CUSTOM_FIELD_IDS.objective, fields.objective || null],
-      // Origin of this lead path = site vitrine contact form (not ad platform).
-      [CUSTOM_FIELD_IDS.source, SOURCE_WEBSITE_VALUE],
+      // DROPDOWN option index — not a label string (ClickUp 400 otherwise).
+      [CUSTOM_FIELD_IDS.source, SOURCE_WEBSITE_OPTION_INDEX],
       [CUSTOM_FIELD_IDS.timestamp, Date.now()],
-      // UTM → dedicated CFs (only when non-empty; filtered below).
+      // UTM → plain TEXT custom fields (strings OK; omit when empty).
       [AD_PLATFORM_CF_ID, fields.utm_source || null],
       [CAMPAIGN_CF_ID, fields.utm_campaign || null],
       [MEDIUM_CF_ID, fields.utm_medium || null],
