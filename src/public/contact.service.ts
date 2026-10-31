@@ -15,12 +15,14 @@ import {
 const CLICKUP_API = 'https://api.clickup.com/api/v2';
 const CONTACT_LIST_ID = '901216143943';
 
-/**
- * TODO(utm-source-cf): Plug in the ClickUp "Source" custom field UUID here.
- * When non-empty, createClickUpTask writes utm_source into that custom field.
- * Until then, UTM attribution lives only in the task description "— Tracking —" block.
- */
-const SOURCE_CUSTOM_FIELD_ID = '';
+/** ClickUp UTM fields on list 901216143943 (Leads - 2026 - GL). */
+const AD_PLATFORM_CF_ID = 'cf2b54ee-4d92-4bf8-9517-8cc6525a264f'; // utm_source
+const CAMPAIGN_CF_ID = '7c7ab555-8bb2-48b6-9267-2f967a57e9a2'; // utm_campaign
+const MEDIUM_CF_ID = '86592919-88b5-4128-b5ca-492d8c9f94bb'; // utm_medium
+
+/** ClickUp "🎯 Source" — lead origin (website form), not ad platform. */
+const SOURCE_CF_ID = 'ce16924f-be03-463f-a368-93d6051004b8';
+const SOURCE_WEBSITE_VALUE = 'Website';
 
 const CUSTOM_FIELD_IDS = {
   email: 'cf170d1a-077f-4912-ae5a-9d1609af4cf3',
@@ -34,7 +36,7 @@ const CUSTOM_FIELD_IDS = {
   city: '2564684e-3169-4816-b521-4cf8a9791b84',
   budget: 'c74b47d5-6b1a-4c74-b237-39bf56542b6d',
   objective: 'f4c4e69d-dbde-4ceb-b477-c596d13363a7',
-  constant6: 'ce16924f-be03-463f-a368-93d6051004b8',
+  source: SOURCE_CF_ID,
   timestamp: 'b0d0af66-e11d-4204-b726-e548b525d4e2',
 } as const;
 
@@ -220,6 +222,8 @@ export class ContactService {
     budget: string;
     objective: string;
     utm_source: string;
+    utm_medium: string;
+    utm_campaign: string;
   }): Array<{ id: string; value: string | number }> {
     const pairs: Array<[string, string | number | null]> = [
       [CUSTOM_FIELD_IDS.email, fields.email || null],
@@ -233,14 +237,14 @@ export class ContactService {
       [CUSTOM_FIELD_IDS.city, fields.city || null],
       [CUSTOM_FIELD_IDS.budget, fields.budget || null],
       [CUSTOM_FIELD_IDS.objective, fields.objective || null],
-      [CUSTOM_FIELD_IDS.constant6, 6],
+      // Origin of this lead path = site vitrine contact form (not ad platform).
+      [CUSTOM_FIELD_IDS.source, SOURCE_WEBSITE_VALUE],
       [CUSTOM_FIELD_IDS.timestamp, Date.now()],
+      // UTM → dedicated CFs (only when non-empty; filtered below).
+      [AD_PLATFORM_CF_ID, fields.utm_source || null],
+      [CAMPAIGN_CF_ID, fields.utm_campaign || null],
+      [MEDIUM_CF_ID, fields.utm_medium || null],
     ];
-
-    // TODO(utm-source-cf): active once SOURCE_CUSTOM_FIELD_ID is set.
-    if (SOURCE_CUSTOM_FIELD_ID && fields.utm_source) {
-      pairs.push([SOURCE_CUSTOM_FIELD_ID, fields.utm_source]);
-    }
 
     return pairs
       .filter(([, value]) => {
@@ -315,6 +319,8 @@ export class ContactService {
         budget: input.budget,
         objective: input.objective,
         utm_source: input.utm_source,
+        utm_medium: input.utm_medium,
+        utm_campaign: input.utm_campaign,
       }),
     };
 
