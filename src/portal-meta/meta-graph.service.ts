@@ -4,6 +4,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { DEFAULT_META_SCOPES } from './portal-meta.constants';
 
 type TokenResponse = {
   access_token?: string;
@@ -52,6 +53,20 @@ export class MetaGraphService {
 
   getGraphVersion(): string {
     return this.graphVersion;
+  }
+
+  /**
+   * Scopes OAuth depuis META_SCOPES (comma-separated).
+   * Défaut: public_profile,email — basculer vers pages_* + leads_retrieval une fois approuvés.
+   */
+  getScopes(): string {
+    const raw = this.config.get<string>('META_SCOPES')?.trim();
+    if (!raw) return DEFAULT_META_SCOPES;
+    const scopes = raw
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    return scopes.length > 0 ? scopes.join(',') : DEFAULT_META_SCOPES;
   }
 
   assertConfigured(): void {

@@ -2,6 +2,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { encryptMetaToken } from '../common/crypto/meta-token-crypto';
@@ -11,7 +12,6 @@ import type { MetaCallbackDto } from './dto/meta-callback.dto';
 import type { UpdateMetaFormDto } from './dto/update-meta-form.dto';
 import { MetaGraphService } from './meta-graph.service';
 import { MetaOauthStateStore } from './meta-oauth-state.store';
-import { META_OAUTH_SCOPES } from './portal-meta.constants';
 
 const CONNECTIONS = 'portal.meta_connections';
 const PAGES = 'portal.meta_pages';
@@ -19,6 +19,8 @@ const FORMS = 'portal.meta_forms';
 
 @Injectable()
 export class PortalMetaService {
+  private readonly logger = new Logger(PortalMetaService.name);
+
   constructor(
     private readonly supabase: SupabaseService,
     private readonly graph: MetaGraphService,
@@ -33,7 +35,7 @@ export class PortalMetaService {
     this.graph.assertConfigured();
     const clientId = this.clientId(user);
     const state = this.oauthState.create(clientId);
-    const scope = META_OAUTH_SCOPES.join(',');
+    const scope = this.graph.getScopes();
     return { url: this.graph.buildDialogUrl(state, scope) };
   }
 
@@ -65,7 +67,6 @@ export class PortalMetaService {
       tokenExpiresAt,
     });
 
-    const pages = await this.graph.listPages(longLived.accessToken);
     const pageSummaries: Array<{ page_id: string; page_name: string }> = [];
     const formSummaries: Array<{
       form_id: string;
@@ -74,30 +75,57 @@ export class PortalMetaService {
       is_linked: boolean;
     }> = [];
 
-    for (const page of pages) {
-      await this.upsertPage({
-        clientId,
-        connectionId,
-        pageId: page.id,
-        pageName: page.name,
-        encPageToken: encryptMetaToken(page.access_token),
-      });
-      pageSummaries.push({ page_id: page.id, page_name: page.name });
+    // Pages / forms need pages_* + leads_retrieval — soft-fail if scopes not granted yet.
+    let pages: Array<{ id: string; name: string; access_token: string }> = [];
+    try {
+      pages = await this.graph.listPages(longLived.accessToken);
+      if (pages.length === 0) {
+        this.logger.log(
+          `Meta callback client=${clientId}: /me/accounts vide (scopes META_SCOPES=${this.graph.getScopes()}). Connexion user OK, pages/forms=[].`,
+        );
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger.warn(
+        `Meta callback client=${clientId}: /me/accounts échec (${msg}). Connexion user conservée, pages/forms=[].`,
+      );
+      return { connected: true, pages: [], forms: [] };
+    }
 
-      const forms = await this.graph.listLeadForms(page.id, page.access_token);
-      for (const form of forms) {
-        const linked = await this.upsertForm({
+    for (const page of pages) {
+      try {
+        await this.upsertPage({
           clientId,
+          connectionId,
           pageId: page.id,
-          formId: form.id,
-          formName: form.name,
+          pageName: page.name,
+          encPageToken: encryptMetaToken(page.access_token),
         });
-        formSummaries.push({
-          form_id: form.id,
-          form_name: form.name,
-          page_id: page.id,
-          is_linked: linked,
-        });
+        pageSummaries.push({ page_id: page.id, page_name: page.name });
+
+        const forms = await this.graph.listLeadForms(
+          page.id,
+          page.access_token,
+        );
+        for (const form of forms) {
+          const linked = await this.upsertForm({
+            clientId,
+            pageId: page.id,
+            formId: form.id,
+            formName: form.name,
+          });
+          formSummaries.push({
+            form_id: form.id,
+            form_name: form.name,
+            page_id: page.id,
+            is_linked: linked,
+          });
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.logger.warn(
+          `Meta callback client=${clientId} page=${page.id}: skip (${msg}).`,
+        );
       }
     }
 
