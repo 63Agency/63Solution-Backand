@@ -96,6 +96,37 @@ export class ContactFormDto {
   @MaxLength(5000)
   message?: string;
 
+  /** Attribution ads (site vitrine) — optionnels. */
+  @IsOptional()
+  @Transform(({ value }) => emptyToUndefined(value))
+  @IsString()
+  @MaxLength(255)
+  utm_source?: string;
+
+  @IsOptional()
+  @Transform(({ value }) => emptyToUndefined(value))
+  @IsString()
+  @MaxLength(255)
+  utm_medium?: string;
+
+  @IsOptional()
+  @Transform(({ value }) => emptyToUndefined(value))
+  @IsString()
+  @MaxLength(255)
+  utm_campaign?: string;
+
+  @IsOptional()
+  @Transform(({ value }) => emptyToUndefined(value))
+  @IsString()
+  @MaxLength(255)
+  utm_content?: string;
+
+  @IsOptional()
+  @Transform(({ value }) => emptyToUndefined(value))
+  @IsString()
+  @MaxLength(255)
+  utm_term?: string;
+
   /** Honeypot anti-spam — doit rester vide. */
   @IsOptional()
   @IsString()

@@ -15,6 +15,13 @@ import {
 const CLICKUP_API = 'https://api.clickup.com/api/v2';
 const CONTACT_LIST_ID = '901216143943';
 
+/**
+ * TODO(utm-source-cf): Plug in the ClickUp "Source" custom field UUID here.
+ * When non-empty, createClickUpTask writes utm_source into that custom field.
+ * Until then, UTM attribution lives only in the task description "— Tracking —" block.
+ */
+const SOURCE_CUSTOM_FIELD_ID = '';
+
 const CUSTOM_FIELD_IDS = {
   email: 'cf170d1a-077f-4912-ae5a-9d1609af4cf3',
   name: '90e56d9a-9864-4dd3-b6ff-8eadd681995b',
@@ -65,6 +72,11 @@ export class ContactService {
     const availability = clean(dto.availability);
     const establishment = clean(dto.establishment);
     const message = clean(dto.message);
+    const utm_source = clean(dto.utm_source);
+    const utm_medium = clean(dto.utm_medium);
+    const utm_campaign = clean(dto.utm_campaign);
+    const utm_content = clean(dto.utm_content);
+    const utm_term = clean(dto.utm_term);
 
     if (!name || !email) {
       throw new BadRequestException({
@@ -89,6 +101,11 @@ export class ContactService {
         availability,
         establishment,
         message,
+        utm_source,
+        utm_medium,
+        utm_campaign,
+        utm_content,
+        utm_term,
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -155,10 +172,40 @@ export class ContactService {
       ['Employees', fields.employees],
       ['Establishment', fields.establishment],
     ];
-    return lines
+    const body = lines
       .filter(([, v]) => Boolean(v))
       .map(([k, v]) => `${k}: ${v}`)
       .join('\n');
+
+    const tracking = this.buildTrackingBlock({
+      utm_source: fields.utm_source,
+      utm_medium: fields.utm_medium,
+      utm_campaign: fields.utm_campaign,
+      utm_content: fields.utm_content,
+      utm_term: fields.utm_term,
+    });
+    if (!tracking) return body;
+    return body ? `${body}\n\n${tracking}` : tracking;
+  }
+
+  /** Appended to ClickUp description only when ≥1 utm_* is non-empty. */
+  private buildTrackingBlock(utm: {
+    utm_source: string;
+    utm_medium: string;
+    utm_campaign: string;
+    utm_content: string;
+    utm_term: string;
+  }): string {
+    const pairs: Array<[string, string]> = [
+      ['Source', utm.utm_source],
+      ['Medium', utm.utm_medium],
+      ['Campaign', utm.utm_campaign],
+      ['Content', utm.utm_content],
+      ['Term', utm.utm_term],
+    ].filter(([, v]) => Boolean(v)) as Array<[string, string]>;
+
+    if (pairs.length === 0) return '';
+    return ['— Tracking —', ...pairs.map(([k, v]) => `${k}: ${v}`)].join('\n');
   }
 
   private buildCustomFields(fields: {
@@ -172,6 +219,7 @@ export class ContactService {
     city: string;
     budget: string;
     objective: string;
+    utm_source: string;
   }): Array<{ id: string; value: string | number }> {
     const pairs: Array<[string, string | number | null]> = [
       [CUSTOM_FIELD_IDS.email, fields.email || null],
@@ -188,6 +236,11 @@ export class ContactService {
       [CUSTOM_FIELD_IDS.constant6, 6],
       [CUSTOM_FIELD_IDS.timestamp, Date.now()],
     ];
+
+    // TODO(utm-source-cf): active once SOURCE_CUSTOM_FIELD_ID is set.
+    if (SOURCE_CUSTOM_FIELD_ID && fields.utm_source) {
+      pairs.push([SOURCE_CUSTOM_FIELD_ID, fields.utm_source]);
+    }
 
     return pairs
       .filter(([, value]) => {
@@ -213,6 +266,11 @@ export class ContactService {
     availability: string;
     establishment: string;
     message: string;
+    utm_source: string;
+    utm_medium: string;
+    utm_campaign: string;
+    utm_content: string;
+    utm_term: string;
   }): Promise<void> {
     const token = this.config.get<string>('CLICKUP_API_TOKEN')?.trim();
     if (!token) {
@@ -235,6 +293,11 @@ export class ContactService {
       employees: input.employees,
       establishment: input.establishment,
       message: input.message,
+      utm_source: input.utm_source,
+      utm_medium: input.utm_medium,
+      utm_campaign: input.utm_campaign,
+      utm_content: input.utm_content,
+      utm_term: input.utm_term,
     });
 
     const body = {
@@ -251,6 +314,7 @@ export class ContactService {
         city: input.city,
         budget: input.budget,
         objective: input.objective,
+        utm_source: input.utm_source,
       }),
     };
 
