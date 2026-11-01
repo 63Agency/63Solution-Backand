@@ -24,6 +24,7 @@ import { PortalStatsModule } from './portal-stats/portal-stats.module';
 import { PortalTasksModule } from './portal-tasks/portal-tasks.module';
 import { PortalTeamModule } from './portal-team/portal-team.module';
 import { PropositionsModule } from './propositions/propositions.module';
+import { ProposalsModule } from './proposals/proposals.module';
 import { SupabaseModule } from './supabase/supabase.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { UsersModule } from './users/users.module';
@@ -62,6 +63,7 @@ import { PublicModule } from './public/public.module';
     EmailModule,
     FacturesModule,
     PropositionsModule,
+    ProposalsModule,
     MeetingsModule,
     UsersModule,
     NotificationsModule,
