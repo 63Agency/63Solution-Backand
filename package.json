@@ -23,6 +23,7 @@
   },
   "dependencies": {
     "@fontsource/inter": "^5.3.0",
+    "@fontsource/plus-jakarta-sans": "^5.3.0",
     "@fontsource/poppins": "^5.3.0",
     "@fontsource/roboto": "^5.2.10",
     "@nestjs/common": "^11.0.1",
