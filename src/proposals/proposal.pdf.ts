@@ -41,10 +41,29 @@ export type ProposalPdfInput = {
   adBudget?: string;
 };
 
+const LOGO = join(process.cwd(), 'public', 'images', '63AgencyTextwhit.png');
+
 const PAGE = { width: 1280, height: 720 } as const;
 const styles = StyleSheet.create({
   page: { position: 'relative', width: 1280, height: 720 },
   bg: { position: 'absolute', top: 0, left: 0, width: 1280, height: 720 },
+  /** Covers the small baked-in logo on the background art. */
+  logoCover: {
+    position: 'absolute',
+    left: 40,
+    top: 22,
+    width: 230,
+    height: 58,
+    backgroundColor: '#0B0B0B',
+  },
+  /** Larger replacement logo (public/images/63AgencyTextwhit.png). */
+  logo: {
+    position: 'absolute',
+    left: 52,
+    top: 28,
+    width: 280,
+    height: 58,
+  },
   client: { position: 'absolute', left: 85, top: 553, fontFamily: 'Poppins', fontWeight: 700, fontSize: 30, color: '#F3F1EA', letterSpacing: 0.6, lineHeight: 1 },
   date: { position: 'absolute', left: 64, top: 656, fontFamily: 'Poppins', fontWeight: 600, fontSize: 11, color: '#8D897F', letterSpacing: 3.3, lineHeight: 1 },
   offer: { position: 'absolute', left: 97, top: 336, fontFamily: 'Poppins', fontWeight: 700, fontSize: 30, color: '#F3F1EA', lineHeight: 1 },
@@ -77,6 +96,8 @@ export async function renderProposalPdf(input: ProposalPdfInput): Promise<Buffer
       Page,
       { size: PAGE, style: styles.page },
       React.createElement(Image, { src: BG1, style: styles.bg }),
+      React.createElement(View, { style: styles.logoCover }),
+      React.createElement(Image, { src: LOGO, style: styles.logo }),
       React.createElement(Text, { style: styles.client }, d.client),
       React.createElement(Text, { style: styles.date }, (d.date || '').toUpperCase()),
     ),
@@ -84,11 +105,15 @@ export async function renderProposalPdf(input: ProposalPdfInput): Promise<Buffer
       Page,
       { size: PAGE, style: styles.page },
       React.createElement(Image, { src: BG2, style: styles.bg }),
+      React.createElement(View, { style: styles.logoCover }),
+      React.createElement(Image, { src: LOGO, style: styles.logo }),
     ),
     React.createElement(
       Page,
       { size: PAGE, style: styles.page },
       React.createElement(Image, { src: BG3, style: styles.bg }),
+      React.createElement(View, { style: styles.logoCover }),
+      React.createElement(Image, { src: LOGO, style: styles.logo }),
       React.createElement(Text, { style: styles.offer }, d.offerName),
       React.createElement(
         Text,
