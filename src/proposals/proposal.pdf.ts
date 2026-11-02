@@ -74,13 +74,21 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: 85,
     top: 553,
-    fontFamily: 'Plus Jakarta Sans',
+    fontFamily: 'Poppins',
     fontWeight: 700,
-    fontSize: 30,
+    fontSize: 34,
     color: '#F3F1EA',
-    letterSpacing: 0.6,
-    lineHeight: 1,
-    textTransform: 'uppercase',
+    letterSpacing: -0.2,
+    lineHeight: 1.1,
+  },
+  /** Continuous gold accent line on every page (fixes broken baked-in line). */
+  pageLine: {
+    position: 'absolute',
+    left: 64,
+    top: 648,
+    width: 1152,
+    height: 2.5,
+    backgroundColor: '#DEA65C',
   },
   date: {
     position: 'absolute',
@@ -291,7 +299,7 @@ const styles = StyleSheet.create({
   p3FootRow: {
     position: 'absolute',
     left: 72,
-    bottom: 26,
+    top: 662,
     flexDirection: 'row',
     alignItems: 'center',
   },
@@ -336,6 +344,7 @@ export async function renderProposalPdf(input: ProposalPdfInput): Promise<Buffer
       React.createElement(Image, { src: LOGO, style: styles.logo }),
       React.createElement(Text, { style: styles.client }, (d.client || '').toUpperCase()),
       React.createElement(Text, { style: styles.date }, (d.date || '').toUpperCase()),
+      React.createElement(View, { style: styles.pageLine }),
     ),
     React.createElement(
       Page,
@@ -343,6 +352,7 @@ export async function renderProposalPdf(input: ProposalPdfInput): Promise<Buffer
       React.createElement(Image, { src: BG2, style: styles.bg }),
       React.createElement(View, { style: styles.logoCover }),
       React.createElement(Image, { src: LOGO, style: styles.logo }),
+      React.createElement(View, { style: [styles.pageLine, { top: 618 }] }),
     ),
     React.createElement(
       Page,
@@ -434,10 +444,10 @@ export async function renderProposalPdf(input: ProposalPdfInput): Promise<Buffer
         ),
       ),
 
+      React.createElement(View, { style: styles.pageLine }),
       React.createElement(
         View,
         { style: styles.p3FootRow },
-        React.createElement(View, { style: styles.p3FootLine }),
         React.createElement(Text, { style: styles.p3Foot }, foot),
       ),
     ),
