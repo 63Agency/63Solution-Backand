@@ -1,4 +1,4 @@
-import { IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
 
 /** POST /leads/:id/proposal/pdf — all fields optional; defaults live in renderProposalPdf. */
 export class GenerateProposalPdfDto {
@@ -36,4 +36,10 @@ export class GenerateProposalPdfDto {
   @IsString()
   @MaxLength(500)
   adBudget?: string;
+
+  /** PDF copy language — `fr` | `en` (default `en`). */
+  @IsOptional()
+  @IsString()
+  @IsIn(['fr', 'en'], { message: 'language doit être fr ou en' })
+  language?: 'fr' | 'en';
 }

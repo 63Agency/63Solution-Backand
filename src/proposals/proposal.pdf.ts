@@ -39,6 +39,8 @@ const BG1 = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAB4AAAAQ4CAIAAABnsVYUA
 const BG2 = join(process.cwd(), 'public', 'images', 'proposal-mechanism.png');
 const BG3 = join(process.cwd(), 'public', 'images', 'image.png');
 
+export type ProposalPdfLanguage = 'fr' | 'en';
+
 export type ProposalPdfInput = {
   client: string;
   date?: string;
@@ -47,7 +49,51 @@ export type ProposalPdfInput = {
   currency?: string;
   period?: string;
   adBudget?: string;
+  language?: ProposalPdfLanguage;
 };
+
+const COPY = {
+  en: {
+    offerName: '3-Month Partnership',
+    period: 'PER QUARTER',
+    adBudget:
+      'Advertising spend remains the responsibility of the client company, with a minimum starting budget of 3,000 DHS/month.',
+    eyebrow: 'INVESTMENT',
+    title1: 'One partnership.',
+    title2Prefix: 'One ',
+    title2Gold: 'outcome.',
+    offerLabel: 'SUSTAINABLE B2B CLIENT ACQUISITION SYSTEM',
+    offerDesc:
+      'Target definition, system build, and continuous operation of the acquisition loop.',
+    budgetLabel: 'ADVERTISING BUDGET',
+    promiseLabel: 'OUR PROMISE',
+    promiseTitle: 'A Sustainable Flow of Targeted Prospects',
+    promiseDesc:
+      'Through a continuously improving acquisition system designed to generate qualified business opportunities for your sales team.',
+    foot: (client: string, date: string) =>
+      `Confidential proposal \u2014 Prepared for ${client} \u00B7 ${date}`.toUpperCase(),
+  },
+  fr: {
+    offerName: 'Partenariat de 3 mois',
+    period: 'PAR TRIMESTRE',
+    adBudget:
+      'Les dépenses publicitaires restent à la charge de l’entreprise cliente, avec un budget initial minimum de 3 000 DHS/mois.',
+    eyebrow: 'INVESTISSEMENT',
+    title1: 'Un partenariat.',
+    title2Prefix: 'Un ',
+    title2Gold: 'résultat.',
+    offerLabel: 'SYSTÈME D’ACQUISITION CLIENT B2B DURABLE',
+    offerDesc:
+      'Définition de la cible, construction du système et exploitation continue de la boucle d’acquisition.',
+    budgetLabel: 'BUDGET PUBLICITAIRE',
+    promiseLabel: 'NOTRE PROMESSE',
+    promiseTitle: 'Un flux durable de prospects ciblés',
+    promiseDesc:
+      'Grâce à un système d’acquisition en amélioration continue, conçu pour générer des opportunités commerciales qualifiées pour votre équipe commerciale.',
+    foot: (client: string, date: string) =>
+      `Proposition confidentielle \u2014 Préparée pour ${client} \u00B7 ${date}`.toUpperCase(),
+  },
+} as const;
 
 const LOGO = join(process.cwd(), 'public', 'images', '63AgencyTextwhit.png');
 
@@ -320,18 +366,18 @@ const styles = StyleSheet.create({
 
 export async function renderProposalPdf(input: ProposalPdfInput): Promise<Buffer> {
   registerFonts();
+  const lang: ProposalPdfLanguage = input.language === 'fr' ? 'fr' : 'en';
+  const copy = COPY[lang];
   const d = {
     client: input.client || '',
     date: input.date || 'OCT 2026',
-    offerName: input.offerName || '3-Month Partnership',
+    offerName: input.offerName || copy.offerName,
     price: input.price || '13 500,00',
     currency: input.currency || 'DHS',
-    period: input.period || 'PER TRIMESTER',
-    adBudget:
-      input.adBudget ||
-      'Advertising spend remains the responsibility of the client company, with a minimum starting budget of 3,000 DHS/month.',
+    period: input.period || copy.period,
+    adBudget: input.adBudget || copy.adBudget,
   };
-  const foot = `Confidential proposal \u2014 Prepared for ${d.client} \u00B7 ${d.date}`.toUpperCase();
+  const foot = copy.foot(d.client, d.date);
 
   const doc = React.createElement(
     Document,
@@ -364,18 +410,18 @@ export async function renderProposalPdf(input: ProposalPdfInput): Promise<Buffer
       React.createElement(
         View,
         { style: styles.p3EyebrowWrap },
-        React.createElement(Text, { style: styles.p3Eyebrow }, 'INVESTMENT'),
+        React.createElement(Text, { style: styles.p3Eyebrow }, copy.eyebrow),
         React.createElement(View, { style: styles.p3EyebrowLine }),
       ),
       React.createElement(
         View,
         { style: styles.p3TitleWrap },
-        React.createElement(Text, { style: styles.p3Title }, 'One partnership.'),
+        React.createElement(Text, { style: styles.p3Title }, copy.title1),
         React.createElement(
           Text,
           { style: styles.p3Title },
-          'One ',
-          React.createElement(Text, { style: styles.p3TitleGold }, 'outcome.'),
+          copy.title2Prefix,
+          React.createElement(Text, { style: styles.p3TitleGold }, copy.title2Gold),
         ),
       ),
 
@@ -385,17 +431,9 @@ export async function renderProposalPdf(input: ProposalPdfInput): Promise<Buffer
         React.createElement(
           View,
           { style: styles.p3OfferLeft },
-          React.createElement(
-            Text,
-            { style: styles.p3OfferLabel },
-            'SUSTAINABLE B2B CLIENT ACQUISITION SYSTEM',
-          ),
+          React.createElement(Text, { style: styles.p3OfferLabel }, copy.offerLabel),
           React.createElement(Text, { style: styles.p3OfferName }, d.offerName),
-          React.createElement(
-            Text,
-            { style: styles.p3OfferDesc },
-            'Target definition, system build, and continuous operation of the acquisition loop.',
-          ),
+          React.createElement(Text, { style: styles.p3OfferDesc }, copy.offerDesc),
         ),
         React.createElement(View, { style: styles.p3OfferDivider }),
         React.createElement(
@@ -418,7 +456,7 @@ export async function renderProposalPdf(input: ProposalPdfInput): Promise<Buffer
       React.createElement(
         View,
         { style: styles.p3BudgetBar },
-        React.createElement(Text, { style: styles.p3BudgetLabel }, 'ADVERTISING BUDGET'),
+        React.createElement(Text, { style: styles.p3BudgetLabel }, copy.budgetLabel),
         React.createElement(View, { style: styles.p3BudgetSep }),
         React.createElement(Text, { style: styles.p3BudgetText }, d.adBudget),
       ),
@@ -430,18 +468,10 @@ export async function renderProposalPdf(input: ProposalPdfInput): Promise<Buffer
           View,
           { style: styles.p3PromiseLabelRow },
           React.createElement(View, { style: styles.p3PromiseLine }),
-          React.createElement(Text, { style: styles.p3PromiseLabel }, 'OUR PROMISE'),
+          React.createElement(Text, { style: styles.p3PromiseLabel }, copy.promiseLabel),
         ),
-        React.createElement(
-          Text,
-          { style: styles.p3PromiseTitle },
-          'A Sustainable Flow of Targeted Prospects',
-        ),
-        React.createElement(
-          Text,
-          { style: styles.p3PromiseDesc },
-          'Through a continuously improving acquisition system designed to generate qualified business opportunities for your sales team.',
-        ),
+        React.createElement(Text, { style: styles.p3PromiseTitle }, copy.promiseTitle),
+        React.createElement(Text, { style: styles.p3PromiseDesc }, copy.promiseDesc),
       ),
 
       React.createElement(View, { style: styles.pageLine }),

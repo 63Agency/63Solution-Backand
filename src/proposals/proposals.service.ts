@@ -34,6 +34,7 @@ export class ProposalsService {
         currency: body.currency,
         period: body.period,
         adBudget: body.adBudget,
+        language: body.language,
       });
 
       return { buffer, client };
@@ -68,6 +69,7 @@ export class ProposalsService {
         currency: body.currency,
         period: body.period,
         adBudget: body.adBudget,
+        language: body.language,
       });
       return { buffer, client };
     } catch (err) {
