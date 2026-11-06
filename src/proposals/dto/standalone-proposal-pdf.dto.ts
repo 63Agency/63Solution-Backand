@@ -24,7 +24,7 @@ export class StandaloneProposalPdfDto {
 
   @IsOptional()
   @IsString()
-  @MaxLength(20)
+  @MaxLength(100)
   currency?: string;
 
   @IsOptional()
