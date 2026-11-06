@@ -104,17 +104,17 @@ const styles = StyleSheet.create({
   logoCover: {
     position: 'absolute',
     left: 40,
-    top: 22,
-    width: 230,
-    height: 58,
+    top: 24,
+    width: 168,
+    height: 42,
     backgroundColor: '#0B0B0B',
   },
   logo: {
     position: 'absolute',
-    left: 52,
+    left: 48,
     top: 28,
-    width: 280,
-    height: 58,
+    width: 200,
+    height: 42,
   },
   client: {
     position: 'absolute',
