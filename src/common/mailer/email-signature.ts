@@ -23,7 +23,7 @@ export const EMAIL_SIGNATURE_MARKER = '<!-- 63agency-email-signature -->';
  */
 const SOCIAL = {
   whatsapp: `https://wa.me/${CONTACT_PHONE_WA}`,
-  instagram: 'https://www.instagram.com/',
+  instagram: 'https://www.instagram.com/63agency.ma?rpxt=MXVkZ3B2Znp6cnRzeA==',
 } as const;
 
 /** Icônes PNG (Icons8 CDN) — plus fiables que SVG dans Gmail/Outlook. */
