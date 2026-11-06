@@ -16,37 +16,45 @@ import { Type } from 'class-transformer';
 import { FactureLineDto } from './facture-line.dto';
 
 export class UpsertFactureDto {
-  @IsString({ message: 'societeNom requis' })
+  @IsOptional()
+  @IsString({ message: 'societeNom invalide' })
   @MaxLength(150, { message: 'societeNom max 150 caractères' })
-  societeNom: string;
+  societeNom?: string;
 
-  @IsString({ message: 'societeRc requis' })
+  @IsOptional()
+  @IsString({ message: 'societeRc invalide' })
   @MaxLength(60, { message: 'societeRc max 60 caractères' })
-  societeRc: string;
+  societeRc?: string;
 
-  @IsString({ message: 'societeCnie requis' })
+  @IsOptional()
+  @IsString({ message: 'societeCnie invalide' })
   @MaxLength(60, { message: 'societeCnie max 60 caractères' })
-  societeCnie: string;
+  societeCnie?: string;
 
-  @IsString({ message: 'societeIce requis' })
+  @IsOptional()
+  @IsString({ message: 'societeIce invalide' })
   @MaxLength(60, { message: 'societeIce max 60 caractères' })
-  societeIce: string;
+  societeIce?: string;
 
-  @IsString({ message: 'societeTp requis' })
+  @IsOptional()
+  @IsString({ message: 'societeTp invalide' })
   @MaxLength(60, { message: 'societeTp max 60 caractères' })
-  societeTp: string;
+  societeTp?: string;
 
-  @IsString({ message: 'societeAdresse requise' })
+  @IsOptional()
+  @IsString({ message: 'societeAdresse invalide' })
   @MaxLength(255, { message: 'societeAdresse max 255 caractères' })
-  societeAdresse: string;
+  societeAdresse?: string;
 
-  @IsString({ message: 'societeTelephone requis' })
+  @IsOptional()
+  @IsString({ message: 'societeTelephone invalide' })
   @MaxLength(60, { message: 'societeTelephone max 60 caractères' })
-  societeTelephone: string;
+  societeTelephone?: string;
 
-  @IsString({ message: 'societeEmail requis' })
+  @IsOptional()
+  @IsString({ message: 'societeEmail invalide' })
   @MaxLength(120, { message: 'societeEmail max 120 caractères' })
-  societeEmail: string;
+  societeEmail?: string;
 
   @IsString({ message: 'clientNom requis' })
   @MaxLength(200, { message: 'clientNom trop long' })
