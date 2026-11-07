@@ -1,13 +1,21 @@
 import React from 'react';
 import { join } from 'path';
+import { readFileSync } from 'fs';
 import {
   Document, Page, View, Text, Image, StyleSheet, Font, renderToBuffer,
 } from '@react-pdf/renderer';
 
+/** Load local image as Buffer — bare path strings fail via fetch() on Windows. */
+function asset(parts: string[]): Buffer {
+  return readFileSync(join(process.cwd(), ...parts));
+}
+
 /* ---- Fonts (Poppins + Inter + Plus Jakarta Sans from @fontsource) ---- */
 let fontsRegistered = false;
+/** data: URI — Node fetch() does not support file:// */
 function ff(pkg: string, file: string): string {
-  return join(process.cwd(), 'node_modules', '@fontsource', pkg, 'files', file);
+  const buf = asset(['node_modules', '@fontsource', pkg, 'files', file]);
+  return `data:font/woff;base64,${buf.toString('base64')}`;
 }
 function registerFonts(): void {
   if (fontsRegistered) return;
@@ -35,10 +43,10 @@ function registerFonts(): void {
 }
 
 /* ---- Background pages (design figé, variables laissées vides) ---- */
-const BG1 = join(process.cwd(), 'public', 'images', 'proposal-cover-bg.png');
-const BG2 = join(process.cwd(), 'public', 'images', 'proposal-mechanism-bg.png');
-const BG3 = join(process.cwd(), 'public', 'images', 'image.png');
-const PROMISE_BG = join(process.cwd(), 'public', 'images', 'image12.png');
+const BG1 = () => asset(['public', 'images', 'proposal-cover-bg.png']);
+const BG2 = () => asset(['public', 'images', 'proposal-mechanism-bg.png']);
+const BG3 = () => asset(['public', 'images', 'image.png']);
+const PROMISE_BG = () => asset(['public', 'images', 'image12.png']);
 
 export type ProposalPdfLanguage = 'fr' | 'en';
 
@@ -203,20 +211,12 @@ function localizeField(
   return v;
 }
 
-const LOGO = join(process.cwd(), 'public', 'images', '63AgencyTextwhit.png');
+const LOGO = () => asset(['public', 'images', '63AgencyTextwhit.png']);
 
 const PAGE = { width: 1280, height: 720 } as const;
 const styles = StyleSheet.create({
   page: { position: 'relative', width: 1280, height: 720 },
   bg: { position: 'absolute', top: 0, left: 0, width: 1280, height: 720 },
-  logoCover: {
-    position: 'absolute',
-    left: 40,
-    top: 24,
-    width: 168,
-    height: 42,
-    backgroundColor: '#0B0B0B',
-  },
   logo: {
     position: 'absolute',
     left: 48,
@@ -255,12 +255,13 @@ const styles = StyleSheet.create({
     letterSpacing: 3.3,
     lineHeight: 1,
   },
-  /** Page 1 footer: DATE ————— PROPOSITION CONFIDENTIELLE —— */
+  /** Page 1 footer: DATE ———— PROPOSITION CONFIDENTIELLE —— */
   p1FootRow: {
     position: 'absolute',
     left: 64,
     top: 652,
     width: 1152,
+    height: 14,
     flexDirection: 'row',
     alignItems: 'center',
   },
@@ -270,12 +271,16 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: '#C9C4B8',
     letterSpacing: 3.2,
-    marginRight: 18,
+    lineHeight: 1,
+    marginRight: 14,
   },
   p1FootLine: {
-    flex: 1,
+    flexGrow: 1,
+    flexShrink: 1,
+    flexBasis: 0,
     height: 1.5,
-    backgroundColor: '#C9A36A',
+    backgroundColor: '#DEA65C',
+    marginTop: 1,
   },
   p1FootConfidential: {
     fontFamily: 'Poppins',
@@ -283,13 +288,15 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: '#C9C4B8',
     letterSpacing: 2.8,
-    marginLeft: 18,
-    marginRight: 18,
+    lineHeight: 1,
+    marginLeft: 14,
+    marginRight: 14,
   },
   p1FootLineEnd: {
-    width: 72,
+    width: 56,
     height: 1.5,
-    backgroundColor: '#C9A36A',
+    backgroundColor: '#DEA65C',
+    marginTop: 1,
   },
 
   /* ---- Page 1 cover (localized text) ---- */
@@ -406,7 +413,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#C9A36A',
     borderRadius: 4,
-    backgroundColor: 'rgba(8,8,8,0.82)',
+    backgroundColor: 'rgba(22,20,18,0.55)',
     paddingVertical: 22,
     paddingHorizontal: 24,
   },
@@ -419,7 +426,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#C9A36A',
     borderRadius: 4,
-    backgroundColor: 'rgba(8,8,8,0.82)',
+    backgroundColor: 'rgba(22,20,18,0.55)',
     paddingVertical: 22,
     paddingHorizontal: 24,
   },
@@ -452,7 +459,7 @@ const styles = StyleSheet.create({
     borderLeftColor: '#DEA65C',
     paddingLeft: 12,
     paddingVertical: 8,
-    backgroundColor: 'rgba(20,18,24,0.9)',
+    backgroundColor: 'rgba(28,24,20,0.45)',
   },
   p2OutcomeText: {
     fontFamily: 'Inter',
@@ -473,7 +480,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 12,
     marginBottom: 8,
-    backgroundColor: 'rgba(12,12,14,0.9)',
+    backgroundColor: 'rgba(28,24,20,0.4)',
   },
   p2LoopTitle: {
     fontFamily: 'Poppins',
@@ -577,7 +584,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#C9A36A',
     borderRadius: 4,
-    backgroundColor: 'rgba(8,8,8,0.78)',
+    backgroundColor: 'rgba(22,20,18,0.5)',
     flexDirection: 'row',
     paddingVertical: 26,
     paddingHorizontal: 34,
@@ -654,7 +661,9 @@ const styles = StyleSheet.create({
     width: 1136,
     height: 54,
     borderRadius: 4,
-    backgroundColor: '#16131B',
+    borderWidth: 1,
+    borderColor: 'rgba(201,163,106,0.35)',
+    backgroundColor: 'rgba(22,20,18,0.55)',
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 30,
@@ -707,7 +716,7 @@ const styles = StyleSheet.create({
     left: 0,
     width: 1136,
     height: 138,
-    backgroundColor: 'rgba(6,6,6,0.28)',
+    backgroundColor: 'rgba(10,8,6,0.18)',
   },
   p3PromiseLabelRow: {
     flexDirection: 'row',
@@ -785,9 +794,8 @@ export async function renderProposalPdf(input: ProposalPdfInput): Promise<Buffer
     React.createElement(
       Page,
       { size: PAGE, style: styles.page },
-      React.createElement(Image, { src: BG1, style: styles.bg }),
-      React.createElement(View, { style: styles.logoCover }),
-      React.createElement(Image, { src: LOGO, style: styles.logo }),
+      React.createElement(Image, { src: BG1(), style: styles.bg }),
+      React.createElement(Image, { src: LOGO(), style: styles.logo }),
       React.createElement(
         View,
         { style: styles.p1EyebrowWrap },
@@ -833,9 +841,8 @@ export async function renderProposalPdf(input: ProposalPdfInput): Promise<Buffer
     React.createElement(
       Page,
       { size: PAGE, style: styles.page },
-      React.createElement(Image, { src: BG2, style: styles.bg }),
-      React.createElement(View, { style: styles.logoCover }),
-      React.createElement(Image, { src: LOGO, style: styles.logo }),
+      React.createElement(Image, { src: BG2(), style: styles.bg }),
+      React.createElement(Image, { src: LOGO(), style: styles.logo }),
       React.createElement(
         View,
         { style: styles.p2EyebrowWrap },
@@ -905,9 +912,8 @@ export async function renderProposalPdf(input: ProposalPdfInput): Promise<Buffer
     React.createElement(
       Page,
       { size: PAGE, style: styles.page },
-      React.createElement(Image, { src: BG3, style: styles.bg }),
-      React.createElement(View, { style: styles.logoCover }),
-      React.createElement(Image, { src: LOGO, style: styles.logo }),
+      React.createElement(Image, { src: BG3(), style: styles.bg }),
+      React.createElement(Image, { src: LOGO(), style: styles.logo }),
 
       React.createElement(
         View,
@@ -966,7 +972,7 @@ export async function renderProposalPdf(input: ProposalPdfInput): Promise<Buffer
       React.createElement(
         View,
         { style: styles.p3PromiseCard },
-        React.createElement(Image, { src: PROMISE_BG, style: styles.p3PromiseBg }),
+        React.createElement(Image, { src: PROMISE_BG(), style: styles.p3PromiseBg }),
         React.createElement(View, { style: styles.p3PromiseScrim }),
         React.createElement(
           View,
