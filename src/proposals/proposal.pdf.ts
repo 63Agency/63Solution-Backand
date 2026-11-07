@@ -255,25 +255,12 @@ const styles = StyleSheet.create({
     letterSpacing: 3.3,
     lineHeight: 1,
   },
-  /**
-   * Page 1 footer — une seule bande :
-   * DATE ———— PROPOSITION CONFIDENTIELLE ——
-   * Masque d’abord la ligne dorée baked-in du fond (sinon on voit 2 lignes).
-   */
-  p1FootMask: {
-    position: 'absolute',
-    left: 40,
-    top: 642,
-    width: 1200,
-    height: 36,
-    backgroundColor: '#000000',
-  },
+  /** Page 1 footer: DATE ————— PROPOSITION CONFIDENTIELLE —— */
   p1FootRow: {
     position: 'absolute',
     left: 64,
     top: 652,
     width: 1152,
-    height: 16,
     flexDirection: 'row',
     alignItems: 'center',
   },
@@ -283,14 +270,12 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: '#C9C4B8',
     letterSpacing: 3.2,
-    lineHeight: 1,
-    marginRight: 14,
+    marginRight: 18,
   },
   p1FootLine: {
-    flexGrow: 1,
+    flex: 1,
     height: 1.5,
-    backgroundColor: '#DEA65C',
-    marginTop: 1,
+    backgroundColor: '#C9A36A',
   },
   p1FootConfidential: {
     fontFamily: 'Poppins',
@@ -298,15 +283,13 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: '#C9C4B8',
     letterSpacing: 2.8,
-    lineHeight: 1,
-    marginLeft: 14,
-    marginRight: 14,
+    marginLeft: 18,
+    marginRight: 18,
   },
   p1FootLineEnd: {
-    width: 56,
+    width: 72,
     height: 1.5,
-    backgroundColor: '#DEA65C',
-    marginTop: 1,
+    backgroundColor: '#C9A36A',
   },
 
   /* ---- Page 1 cover (localized text) ---- */
@@ -830,7 +813,6 @@ export async function renderProposalPdf(input: ProposalPdfInput): Promise<Buffer
         React.createElement(Text, { style: styles.p1Prepared }, copy.preparedFor),
       ),
       React.createElement(Text, { style: styles.client }, (d.client || '').toUpperCase()),
-      React.createElement(View, { style: styles.p1FootMask }),
       React.createElement(
         View,
         { style: styles.p1FootRow },
