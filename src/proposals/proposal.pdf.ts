@@ -475,7 +475,7 @@ const styles = StyleSheet.create({
   },
   p2LoopItem: {
     borderWidth: 1,
-    borderColor: 'rgba(201,163,106,0.35)',
+    borderColor: '#C9A36A',
     borderRadius: 4,
     paddingVertical: 10,
     paddingHorizontal: 12,
@@ -662,7 +662,7 @@ const styles = StyleSheet.create({
     height: 54,
     borderRadius: 4,
     borderWidth: 1,
-    borderColor: 'rgba(201,163,106,0.35)',
+    borderColor: '#C9A36A',
     backgroundColor: 'rgba(22,20,18,0.55)',
     flexDirection: 'row',
     alignItems: 'center',
