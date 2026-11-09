@@ -486,8 +486,7 @@ const styles = StyleSheet.create({
   p2LoopItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.07)',
+    borderWidth: 0,
     borderRadius: 12,
     paddingVertical: 15,
     paddingHorizontal: 18,
