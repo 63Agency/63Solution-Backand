@@ -2,7 +2,17 @@ import React from 'react';
 import { join } from 'path';
 import { readFileSync } from 'fs';
 import {
-  Document, Page, View, Text, Image, StyleSheet, Font, renderToBuffer,
+  Document,
+  Page,
+  View,
+  Text,
+  Image,
+  StyleSheet,
+  Font,
+  Svg,
+  Line,
+  Path,
+  renderToBuffer,
 } from '@react-pdf/renderer';
 
 /** Load local image as Buffer — bare path strings fail via fetch() on Windows. */
@@ -392,7 +402,7 @@ const styles = StyleSheet.create({
   p2TitleWrap: {
     position: 'absolute',
     left: 72,
-    top: 88,
+    top: 124,
   },
   p2Title: {
     fontFamily: 'Poppins',
@@ -407,7 +417,7 @@ const styles = StyleSheet.create({
   p2Step1: {
     position: 'absolute',
     left: 72,
-    top: 190,
+    top: 226,
     width: 520,
     height: 320,
     borderWidth: 1,
@@ -420,7 +430,7 @@ const styles = StyleSheet.create({
   p2Step2: {
     position: 'absolute',
     left: 620,
-    top: 190,
+    top: 226,
     width: 588,
     height: 320,
     borderWidth: 1,
@@ -532,68 +542,32 @@ const styles = StyleSheet.create({
     borderRightColor: 'transparent',
     borderTopColor: '#DEA65C',
   },
-  /** Crochet doré RETOURS (Views only — pas de glyphs). */
+  /** Crochet doré RETOURS (SVG — flèche propre vers ATTIRER). */
   p2FeedbackCol: {
-    width: 52,
+    width: 58,
     flexDirection: 'row',
     alignItems: 'stretch',
-    paddingTop: 4,
-    paddingBottom: 4,
+    paddingTop: 2,
+    paddingBottom: 2,
   },
   p2FeedbackBracket: {
-    width: 22,
-    position: 'relative',
-    marginRight: 6,
-  },
-  p2FeedbackVert: {
-    position: 'absolute',
-    top: 0,
-    bottom: 0,
-    right: 0,
-    width: 2,
-    backgroundColor: '#DEA65C',
-  },
-  p2FeedbackTopArm: {
-    position: 'absolute',
-    top: 0,
-    right: 0,
-    width: 18,
-    height: 2,
-    backgroundColor: '#DEA65C',
-  },
-  p2FeedbackTopArrow: {
-    position: 'absolute',
-    top: -4,
-    left: 0,
-    width: 0,
-    height: 0,
-    borderTopWidth: 5,
-    borderBottomWidth: 5,
-    borderRightWidth: 7,
-    borderTopColor: 'transparent',
-    borderBottomColor: 'transparent',
-    borderRightColor: '#DEA65C',
-  },
-  p2FeedbackBottomArm: {
-    position: 'absolute',
-    bottom: 0,
-    right: 0,
-    width: 18,
-    height: 2,
-    backgroundColor: '#DEA65C',
+    width: 34,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   p2FeedbackLetters: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
+    paddingLeft: 2,
   },
   p2FeedbackLetter: {
     fontFamily: 'Poppins',
     fontWeight: 700,
     fontSize: 11,
     color: '#DEA65C',
-    letterSpacing: 0,
-    lineHeight: 1.25,
+    letterSpacing: 1.2,
+    lineHeight: 1.35,
   },
   p2FeedbackNote: {
     marginTop: 10,
@@ -606,7 +580,7 @@ const styles = StyleSheet.create({
   p2PromiseBar: {
     position: 'absolute',
     left: 72,
-    top: 532,
+    top: 568,
     width: 1136,
     height: 52,
     borderRadius: 4,
@@ -1022,10 +996,42 @@ export async function renderProposalPdf(input: ProposalPdfInput): Promise<Buffer
             React.createElement(
               View,
               { style: styles.p2FeedbackBracket },
-              React.createElement(View, { style: styles.p2FeedbackVert }),
-              React.createElement(View, { style: styles.p2FeedbackTopArm }),
-              React.createElement(View, { style: styles.p2FeedbackTopArrow }),
-              React.createElement(View, { style: styles.p2FeedbackBottomArm }),
+              React.createElement(
+                Svg,
+                { width: 34, height: 210, viewBox: '0 0 34 210' },
+                // vertical stem
+                React.createElement(Line, {
+                  x1: 26,
+                  y1: 12,
+                  x2: 26,
+                  y2: 198,
+                  stroke: '#DEA65C',
+                  strokeWidth: 2.2,
+                }),
+                // top arm → toward ATTIRER
+                React.createElement(Line, {
+                  x1: 10,
+                  y1: 12,
+                  x2: 26,
+                  y2: 12,
+                  stroke: '#DEA65C',
+                  strokeWidth: 2.2,
+                }),
+                // left-pointing arrow head
+                React.createElement(Path, {
+                  d: 'M 2 12 L 11 6.5 L 11 17.5 Z',
+                  fill: '#DEA65C',
+                }),
+                // bottom arm ← from TRANSMETTRE
+                React.createElement(Line, {
+                  x1: 10,
+                  y1: 198,
+                  x2: 26,
+                  y2: 198,
+                  stroke: '#DEA65C',
+                  strokeWidth: 2.2,
+                }),
+              ),
             ),
             React.createElement(
               View,
