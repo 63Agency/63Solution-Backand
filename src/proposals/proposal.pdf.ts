@@ -10,7 +10,6 @@ import {
   StyleSheet,
   Font,
   Svg,
-  Line,
   Path,
   renderToBuffer,
 } from '@react-pdf/renderer';
@@ -491,7 +490,7 @@ const styles = StyleSheet.create({
   },
   p2LoopCol: {
     flex: 1,
-    paddingRight: 8,
+    paddingRight: 4,
   },
   p2LoopItem: {
     flexDirection: 'row',
@@ -542,32 +541,32 @@ const styles = StyleSheet.create({
     borderRightColor: 'transparent',
     borderTopColor: '#DEA65C',
   },
-  /** Crochet doré RETOURS (SVG — flèche propre vers ATTIRER). */
+  /**
+   * Crochet RETOURS — SVG exact :
+   * ←──┐
+   *    │ RETOURS (vertical)
+   * ───┘
+   * Bras haut = milieu ATTIRER, bras bas = milieu TRANSMETTRE.
+   */
   p2FeedbackCol: {
-    width: 58,
+    width: 54,
     flexDirection: 'row',
-    alignItems: 'stretch',
-    paddingTop: 2,
-    paddingBottom: 2,
-  },
-  p2FeedbackBracket: {
-    width: 34,
-    justifyContent: 'center',
     alignItems: 'center',
+    justifyContent: 'flex-start',
+    paddingLeft: 2,
   },
   p2FeedbackLetters: {
-    flex: 1,
+    marginLeft: 4,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingLeft: 2,
   },
   p2FeedbackLetter: {
     fontFamily: 'Poppins',
     fontWeight: 700,
-    fontSize: 11,
+    fontSize: 10,
     color: '#DEA65C',
-    letterSpacing: 1.2,
-    lineHeight: 1.35,
+    letterSpacing: 1.4,
+    lineHeight: 1.3,
   },
   p2FeedbackNote: {
     marginTop: 10,
@@ -845,6 +844,41 @@ const styles = StyleSheet.create({
   },
 });
 
+/**
+ * Flèche RETOURS exacte (référence design) :
+ *   ←──────┐
+ *          │  R E T O U R S (lettres verticales à droite)
+ *   ───────┘
+ * Ouverture vers la gauche (vers les pills ATTIRER → TRANSMETTRE).
+ */
+function retoursLoopSvg() {
+  const W = 34;
+  const H = 198;
+  const top = 14; // centre approx. 1ère pill
+  const bot = H - 14; // centre approx. 3e pill
+  const stemX = 26;
+  const armEndX = 9; // extrémité gauche des bras (avant pointe)
+
+  return React.createElement(
+    Svg,
+    { width: W, height: H, viewBox: `0 0 ${W} ${H}` },
+    // Crochet en un seul trait (haut → vertical → bas)
+    React.createElement(Path, {
+      d: `M ${armEndX} ${top} L ${stemX} ${top} L ${stemX} ${bot} L ${armEndX} ${bot}`,
+      stroke: '#DEA65C',
+      strokeWidth: 2,
+      fill: 'none',
+      strokeLinecap: 'square',
+      strokeLinejoin: 'miter',
+    }),
+    // Pointe de flèche ← vers ATTIRER
+    React.createElement(Path, {
+      d: `M 2 ${top} L ${armEndX + 0.5} ${top - 5.5} L ${armEndX + 0.5} ${top + 5.5} Z`,
+      fill: '#DEA65C',
+    }),
+  );
+}
+
 export async function renderProposalPdf(input: ProposalPdfInput): Promise<Buffer> {
   registerFonts();
   const lang: ProposalPdfLanguage = input.language === 'fr' ? 'fr' : 'en';
@@ -993,46 +1027,7 @@ export async function renderProposalPdf(input: ProposalPdfInput): Promise<Buffer
           React.createElement(
             View,
             { style: styles.p2FeedbackCol },
-            React.createElement(
-              View,
-              { style: styles.p2FeedbackBracket },
-              React.createElement(
-                Svg,
-                { width: 34, height: 210, viewBox: '0 0 34 210' },
-                // vertical stem
-                React.createElement(Line, {
-                  x1: 26,
-                  y1: 12,
-                  x2: 26,
-                  y2: 198,
-                  stroke: '#DEA65C',
-                  strokeWidth: 2.2,
-                }),
-                // top arm → toward ATTIRER
-                React.createElement(Line, {
-                  x1: 10,
-                  y1: 12,
-                  x2: 26,
-                  y2: 12,
-                  stroke: '#DEA65C',
-                  strokeWidth: 2.2,
-                }),
-                // left-pointing arrow head
-                React.createElement(Path, {
-                  d: 'M 2 12 L 11 6.5 L 11 17.5 Z',
-                  fill: '#DEA65C',
-                }),
-                // bottom arm ← from TRANSMETTRE
-                React.createElement(Line, {
-                  x1: 10,
-                  y1: 198,
-                  x2: 26,
-                  y2: 198,
-                  stroke: '#DEA65C',
-                  strokeWidth: 2.2,
-                }),
-              ),
-            ),
+            retoursLoopSvg(),
             React.createElement(
               View,
               { style: styles.p2FeedbackLetters },
