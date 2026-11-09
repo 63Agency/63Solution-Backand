@@ -542,31 +542,41 @@ const styles = StyleSheet.create({
     borderTopColor: '#DEA65C',
   },
   /**
-   * Crochet RETOURS — SVG exact :
+   * Crochet RETOURS exact (réf. image) :
    * ←──┐
-   *    │ RETOURS (vertical)
+   *    │     ← segment haut
+   *  RETOURS ← texte DANS la coupure du trait vertical
+   *    │     ← segment bas
    * ───┘
-   * Bras haut = milieu ATTIRER, bras bas = milieu TRANSMETTRE.
    */
   p2FeedbackCol: {
-    width: 54,
-    flexDirection: 'row',
+    width: 42,
     alignItems: 'center',
-    justifyContent: 'flex-start',
+    justifyContent: 'center',
     paddingLeft: 2,
   },
-  p2FeedbackLetters: {
-    marginLeft: 4,
+  p2RetoursWrap: {
+    width: 40,
+    height: 200,
+    position: 'relative',
+  },
+  p2RetoursLetters: {
+    position: 'absolute',
+    top: 62,
+    left: 23,
+    width: 14,
+    height: 76,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  p2FeedbackLetter: {
+  p2RetoursLetter: {
     fontFamily: 'Poppins',
     fontWeight: 700,
     fontSize: 10,
     color: '#DEA65C',
-    letterSpacing: 1.4,
-    lineHeight: 1.3,
+    letterSpacing: 2,
+    lineHeight: 1.35,
+    textAlign: 'center',
   },
   p2FeedbackNote: {
     marginTop: 10,
@@ -845,37 +855,82 @@ const styles = StyleSheet.create({
 });
 
 /**
- * Flèche RETOURS exacte (référence design) :
- *   ←──────┐
- *          │  R E T O U R S (lettres verticales à droite)
- *   ───────┘
- * Ouverture vers la gauche (vers les pills ATTIRER → TRANSMETTRE).
+ * Flèche RETOURS = image de référence exactement :
+ *   ←──┐
+ *      │
+ *   RETOURS   ← dans la coupure du trait vertical
+ *      │
+ *   ───┘
  */
-function retoursLoopSvg() {
-  const W = 34;
-  const H = 198;
-  const top = 14; // centre approx. 1ère pill
-  const bot = H - 14; // centre approx. 3e pill
-  const stemX = 26;
-  const armEndX = 9; // extrémité gauche des bras (avant pointe)
+function retoursLoopGraphic(label: string) {
+  const W = 40;
+  const H = 200;
+  const GOLD = '#DEA65C';
+  const SW = 2.4;
+  const stemX = 30;
+  const armLeft = 12;
+  const topY = 10;
+  const botY = H - 10;
+  // Coupure verticale pour le mot (avec petit gap au-dessus / en-dessous)
+  const gapTop = 58;
+  const gapBot = 142;
 
   return React.createElement(
-    Svg,
-    { width: W, height: H, viewBox: `0 0 ${W} ${H}` },
-    // Crochet en un seul trait (haut → vertical → bas)
-    React.createElement(Path, {
-      d: `M ${armEndX} ${top} L ${stemX} ${top} L ${stemX} ${bot} L ${armEndX} ${bot}`,
-      stroke: '#DEA65C',
-      strokeWidth: 2,
-      fill: 'none',
-      strokeLinecap: 'square',
-      strokeLinejoin: 'miter',
-    }),
-    // Pointe de flèche ← vers ATTIRER
-    React.createElement(Path, {
-      d: `M 2 ${top} L ${armEndX + 0.5} ${top - 5.5} L ${armEndX + 0.5} ${top + 5.5} Z`,
-      fill: '#DEA65C',
-    }),
+    View,
+    { style: styles.p2RetoursWrap },
+    React.createElement(
+      Svg,
+      { width: W, height: H, viewBox: `0 0 ${W} ${H}` },
+      // Pointe pleine ← (triangle équilatéral)
+      React.createElement(Path, {
+        d: `M 2 ${topY} L 12 ${topY - 6} L 12 ${topY + 6} Z`,
+        fill: GOLD,
+      }),
+      // Bras haut
+      React.createElement(Path, {
+        d: `M 12 ${topY} L ${stemX} ${topY}`,
+        stroke: GOLD,
+        strokeWidth: SW,
+        fill: 'none',
+        strokeLinecap: 'square',
+      }),
+      // Segment vertical HAUT (jusqu’à la coupure)
+      React.createElement(Path, {
+        d: `M ${stemX} ${topY} L ${stemX} ${gapTop}`,
+        stroke: GOLD,
+        strokeWidth: SW,
+        fill: 'none',
+        strokeLinecap: 'square',
+      }),
+      // Segment vertical BAS (après la coupure)
+      React.createElement(Path, {
+        d: `M ${stemX} ${gapBot} L ${stemX} ${botY}`,
+        stroke: GOLD,
+        strokeWidth: SW,
+        fill: 'none',
+        strokeLinecap: 'square',
+      }),
+      // Bras bas
+      React.createElement(Path, {
+        d: `M ${armLeft} ${botY} L ${stemX} ${botY}`,
+        stroke: GOLD,
+        strokeWidth: SW,
+        fill: 'none',
+        strokeLinecap: 'square',
+      }),
+    ),
+    // RETOURS dans la coupure, centré sur le trait vertical
+    React.createElement(
+      View,
+      { style: styles.p2RetoursLetters },
+      ...Array.from(label).map((ch, i) =>
+        React.createElement(
+          Text,
+          { key: `rt-${i}`, style: styles.p2RetoursLetter },
+          ch,
+        ),
+      ),
+    ),
   );
 }
 
@@ -1027,18 +1082,7 @@ export async function renderProposalPdf(input: ProposalPdfInput): Promise<Buffer
           React.createElement(
             View,
             { style: styles.p2FeedbackCol },
-            retoursLoopSvg(),
-            React.createElement(
-              View,
-              { style: styles.p2FeedbackLetters },
-              ...Array.from(copy.feedback).map((ch, i) =>
-                React.createElement(
-                  Text,
-                  { key: `fb-${i}`, style: styles.p2FeedbackLetter },
-                  ch,
-                ),
-              ),
-            ),
+            retoursLoopGraphic(copy.feedback),
           ),
         ),
         React.createElement(Text, { style: styles.p2FeedbackNote }, copy.feedbackNote),
