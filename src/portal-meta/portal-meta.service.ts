@@ -75,19 +75,23 @@ export class PortalMetaService {
       is_linked: boolean;
     }> = [];
 
-    // Pages / forms need pages_* + leads_retrieval — soft-fail if scopes not granted yet.
+    // Pages BM (owned/client) + fallback /me/accounts — soft-fail if scopes missing.
     let pages: Array<{ id: string; name: string; access_token: string }> = [];
     try {
-      pages = await this.graph.listPages(longLived.accessToken);
+      pages = await this.graph.discoverPages(longLived.accessToken);
       if (pages.length === 0) {
         this.logger.log(
-          `Meta callback client=${clientId}: /me/accounts vide (scopes META_SCOPES=${this.graph.getScopes()}). Connexion user OK, pages/forms=[].`,
+          `Meta callback client=${clientId}: aucune Page (scopes META_SCOPES=${this.graph.getScopes()}). Connexion user OK, pages/forms=[].`,
+        );
+      } else {
+        this.logger.log(
+          `Meta callback client=${clientId}: ${pages.length} page(s) découvertes.`,
         );
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.logger.warn(
-        `Meta callback client=${clientId}: /me/accounts échec (${msg}). Connexion user conservée, pages/forms=[].`,
+        `Meta callback client=${clientId}: discoverPages échec (${msg}). Connexion user conservée, pages/forms=[].`,
       );
       return { connected: true, pages: [], forms: [] };
     }
@@ -103,10 +107,20 @@ export class PortalMetaService {
         });
         pageSummaries.push({ page_id: page.id, page_name: page.name });
 
-        const forms = await this.graph.listLeadForms(
-          page.id,
-          page.access_token,
-        );
+        // leadgen_forms MUST use the PAGE access token (not the user token).
+        let forms: Array<{ id: string; name: string; status: string | null }> =
+          [];
+        try {
+          forms = await this.graph.listLeadForms(page.id, page.access_token);
+        } catch (formErr) {
+          const formMsg =
+            formErr instanceof Error ? formErr.message : String(formErr);
+          this.logger.warn(
+            `Meta callback client=${clientId} page=${page.id} leadgen_forms: ${formMsg}`,
+          );
+          forms = [];
+        }
+
         for (const form of forms) {
           const linked = await this.upsertForm({
             clientId,
