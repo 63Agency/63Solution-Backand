@@ -23,6 +23,19 @@ export type MetaPageRef = {
   access_token: string;
 };
 
+export type MetaLeadgenField = {
+  name?: string;
+  values?: string[];
+};
+
+export type MetaLeadgenDetails = {
+  id: string;
+  created_time?: string;
+  field_data?: MetaLeadgenField[];
+  ad_name?: string;
+  form_id?: string;
+};
+
 type GraphPageNode = {
   id?: string;
   name?: string;
@@ -278,6 +291,38 @@ export class MetaGraphService {
         name: String(f.name ?? ''),
         status: f.status != null ? String(f.status) : null,
       }));
+  }
+
+  /**
+   * Fetch a single Lead Ads submission by leadgen_id (PAGE access token).
+   * Never logs the token.
+   */
+  async getLeadgen(
+    leadgenId: string,
+    pageToken: string,
+  ): Promise<MetaLeadgenDetails> {
+    const path = `${this.graphBase}/${encodeURIComponent(leadgenId)}?fields=id,created_time,field_data,ad_name,form_id`;
+    const body = await this.getJson<
+      MetaLeadgenDetails & GraphErrorBody
+    >(this.withAccessToken(path, pageToken));
+
+    if (body.error || !body.id) {
+      throw new BadGatewayException({
+        message:
+          this.fbMessage(body) ||
+          `Impossible de récupérer le lead Meta (${leadgenId}).`,
+      });
+    }
+
+    return {
+      id: String(body.id),
+      created_time: body.created_time
+        ? String(body.created_time)
+        : undefined,
+      field_data: Array.isArray(body.field_data) ? body.field_data : [],
+      ad_name: body.ad_name != null ? String(body.ad_name) : undefined,
+      form_id: body.form_id != null ? String(body.form_id) : undefined,
+    };
   }
 
   private async listBusinesses(

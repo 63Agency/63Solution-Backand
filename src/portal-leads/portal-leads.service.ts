@@ -289,16 +289,137 @@ export class PortalLeadsService {
     }
 
     const lead = data as LeadRow;
+    await this.applyLeadCreatedSideEffects({
+      clientId,
+      lead,
+      actor: actorFromUser(user),
+    });
+
+    return mapLead(lead);
+  }
+
+  /**
+   * Import Meta Lead Ads (webhook) — same side effects as manual create
+   * (activity `received` + auto tâche `appel`). Idempotent via meta_lead_id.
+   */
+  async createFromMetaLead(input: {
+    clientId: string;
+    metaLeadId: string;
+    metaFormId: string;
+    name: string;
+    phone: string | null;
+    email: string | null;
+    campaign: string | null;
+    createdAt: string | null;
+  }): Promise<'created' | 'duplicate'> {
+    const clientId = input.clientId;
+    const metaLeadId = input.metaLeadId.trim();
+    if (!metaLeadId) {
+      throw new BadRequestException({ message: 'meta_lead_id requis.' });
+    }
+
+    const { data: existing, error: existingErr } = await this.supabase
+      .getClient()
+      .from(PORTAL_LEADS_TABLE)
+      .select('id')
+      .eq('client_id', clientId)
+      .eq('meta_lead_id', metaLeadId)
+      .maybeSingle();
+
+    if (existingErr) {
+      throw new ConflictException({ message: existingErr.message });
+    }
+    if (existing) {
+      return 'duplicate';
+    }
+
+    const pipelineId = await this.findDefaultPipelineId(clientId);
+    const name = input.name.trim() || 'Lead Meta';
+    const email = input.email?.trim().toLowerCase() || null;
+    const phone = input.phone?.trim() || null;
+    const campaign = input.campaign?.trim() || null;
+
+    const row: Record<string, unknown> = {
+      client_id: clientId,
+      pipeline_id: pipelineId,
+      name,
+      phone,
+      email,
+      campaign,
+      stage: 'nouveau',
+      meta_form_id: input.metaFormId.trim() || null,
+      meta_lead_id: metaLeadId,
+    };
+    if (input.createdAt) {
+      row.created_at = input.createdAt;
+    }
+
+    const { data, error } = await this.supabase
+      .getClient()
+      .from(PORTAL_LEADS_TABLE)
+      .insert(row)
+      .select(LEAD_SELECT)
+      .single();
+
+    if (error || !data) {
+      const msg = error?.message ?? '';
+      if (
+        error?.code === '23505' ||
+        /portal_leads_client_meta_lead_id|meta_lead_id/i.test(msg)
+      ) {
+        return 'duplicate';
+      }
+      throw new ConflictException({
+        message: msg || 'Impossible de créer le lead Meta.',
+      });
+    }
+
+    const lead = data as LeadRow;
+    await this.applyLeadCreatedSideEffects({
+      clientId,
+      lead,
+      actor: 'Meta',
+    });
+    return 'created';
+  }
+
+  private async findDefaultPipelineId(
+    clientId: string,
+  ): Promise<string | null> {
+    const { data, error } = await this.supabase
+      .getClient()
+      .from(PORTAL_PIPELINES_TABLE)
+      .select('id')
+      .eq('client_id', clientId)
+      .order('created_at', { ascending: true })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      this.logger.warn(
+        `default pipeline client=${clientId}: ${error.message}`,
+      );
+      return null;
+    }
+    return data?.id != null ? String(data.id) : null;
+  }
+
+  /** Activity `received` + auto tâche `appel` — shared by manual + Meta create. */
+  private async applyLeadCreatedSideEffects(input: {
+    clientId: string;
+    lead: LeadRow;
+    actor: string;
+  }): Promise<void> {
+    const { clientId, lead, actor } = input;
     await this.tryInsertActivity({
       clientId,
       leadId: lead.id,
       kind: 'received',
-      actor: actorFromUser(user),
+      actor,
       message: 'Lead reçu',
       detail: lead.name,
     });
 
-    // UI: nouveaux leads → tâche d'appel automatique (due aujourd’hui).
     await this.portalTasks.tryCreateFromLead({
       clientId,
       leadId: lead.id,
@@ -309,8 +430,6 @@ export class PortalLeadsService {
       dueAt: endOfUtcDayIso(),
       details: null,
     });
-
-    return mapLead(lead);
   }
 
   async update(id: string, dto: UpdateLeadDto, user: PortalClientUser) {
