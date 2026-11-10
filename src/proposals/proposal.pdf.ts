@@ -631,11 +631,14 @@ const styles = StyleSheet.create({
     fontWeight: 700,
     fontSize: 15,
     color: '#0E0C0A',
-    marginRight: 14,
   },
-  /** Fine line → jusqu’à la fin du cadre (marge paddingRight du bar). */
-  p2PromiseRightLine: {
+  /** Pousse la petite ligne vers la fin du cadre. */
+  p2PromiseSpacer: {
     flex: 1,
+  },
+  /** Petite ligne placée à droite / fin du cadre. */
+  p2PromiseRightLine: {
+    width: 160,
     height: 1.2,
     backgroundColor: '#1A1510',
     marginBottom: 3,
@@ -1121,6 +1124,7 @@ export async function renderProposalPdf(input: ProposalPdfInput): Promise<Buffer
           View,
           { style: styles.p2PromiseTextRow },
           React.createElement(Text, { style: styles.p2PromiseBanner }, copy.promiseBanner),
+          React.createElement(View, { style: styles.p2PromiseSpacer }),
           React.createElement(View, { style: styles.p2PromiseRightLine }),
         ),
       ),
