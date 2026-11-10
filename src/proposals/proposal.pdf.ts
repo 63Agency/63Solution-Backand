@@ -451,16 +451,16 @@ const styles = StyleSheet.create({
   p2StepTitle: {
     fontFamily: 'Poppins',
     fontWeight: 700,
-    fontSize: 28,
+    fontSize: 34,
     color: '#F7F4EE',
-    marginBottom: 12,
+    marginBottom: 14,
   },
   p2StepBody: {
     fontFamily: 'Inter',
     fontWeight: 400,
-    fontSize: 12.5,
+    fontSize: 14.5,
     color: '#C9C4B8',
-    lineHeight: 1.45,
+    lineHeight: 1.48,
     marginBottom: 16,
   },
   p2OutcomeBox: {
@@ -628,9 +628,10 @@ const styles = StyleSheet.create({
     marginRight: 20,
   },
   p2PromiseRightLine: {
-    flex: 1,
+    width: 220,
     height: 1.5,
     backgroundColor: '#1A1510',
+    marginLeft: 8,
   },
 
   /* ---- Page 3 (Investment) — drawn like devis/facture ---- */
