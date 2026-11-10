@@ -401,7 +401,7 @@ const styles = StyleSheet.create({
   p2TitleWrap: {
     position: 'absolute',
     left: 72,
-    top: 124,
+    top: 158,
   },
   p2Title: {
     fontFamily: 'Poppins',
@@ -416,7 +416,7 @@ const styles = StyleSheet.create({
   p2Step1: {
     position: 'absolute',
     left: 72,
-    top: 226,
+    top: 218,
     width: 520,
     height: 320,
     borderWidth: 1,
@@ -429,7 +429,7 @@ const styles = StyleSheet.create({
   p2Step2: {
     position: 'absolute',
     left: 620,
-    top: 226,
+    top: 218,
     width: 588,
     height: 320,
     borderWidth: 1,
@@ -550,32 +550,31 @@ const styles = StyleSheet.create({
    * ───┘
    */
   p2FeedbackCol: {
-    width: 42,
+    width: 72,
     alignItems: 'center',
     justifyContent: 'center',
     paddingLeft: 2,
   },
   p2RetoursWrap: {
-    width: 40,
+    width: 70,
     height: 200,
     position: 'relative',
   },
   p2RetoursLetters: {
     position: 'absolute',
-    top: 62,
-    left: 23,
-    width: 14,
-    height: 76,
+    top: 86,
+    left: 0,
+    right: 0,
+    height: 28,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  p2RetoursLetter: {
+  p2RetoursWord: {
     fontFamily: 'Poppins',
     fontWeight: 700,
-    fontSize: 10,
+    fontSize: 9,
     color: '#DEA65C',
-    letterSpacing: 2,
-    lineHeight: 1.35,
+    letterSpacing: 1.8,
     textAlign: 'center',
   },
   p2FeedbackNote: {
@@ -589,7 +588,7 @@ const styles = StyleSheet.create({
   p2PromiseBar: {
     position: 'absolute',
     left: 72,
-    top: 568,
+    top: 560,
     width: 1136,
     height: 52,
     borderRadius: 4,
@@ -863,17 +862,17 @@ const styles = StyleSheet.create({
  *   ───┘
  */
 function retoursLoopGraphic(label: string) {
-  const W = 40;
+  const W = 70;
   const H = 200;
   const GOLD = '#DEA65C';
   const SW = 2.4;
-  const stemX = 30;
-  const armLeft = 12;
+  const stemX = 58;
+  const armLeft = 28;
   const topY = 10;
   const botY = H - 10;
-  // Coupure verticale pour le mot (avec petit gap au-dessus / en-dessous)
-  const gapTop = 58;
-  const gapBot = 142;
+  // Coupure verticale pour le mot HORIZONTAL
+  const gapTop = 84;
+  const gapBot = 116;
 
   return React.createElement(
     View,
@@ -883,12 +882,12 @@ function retoursLoopGraphic(label: string) {
       { width: W, height: H, viewBox: `0 0 ${W} ${H}` },
       // Pointe pleine ← (triangle équilatéral)
       React.createElement(Path, {
-        d: `M 2 ${topY} L 12 ${topY - 6} L 12 ${topY + 6} Z`,
+        d: `M 18 ${topY} L 28 ${topY - 6} L 28 ${topY + 6} Z`,
         fill: GOLD,
       }),
       // Bras haut
       React.createElement(Path, {
-        d: `M 12 ${topY} L ${stemX} ${topY}`,
+        d: `M 28 ${topY} L ${stemX} ${topY}`,
         stroke: GOLD,
         strokeWidth: SW,
         fill: 'none',
@@ -919,17 +918,11 @@ function retoursLoopGraphic(label: string) {
         strokeLinecap: 'square',
       }),
     ),
-    // RETOURS dans la coupure, centré sur le trait vertical
+    // RETOURS en une seule ligne horizontale dans la coupure
     React.createElement(
       View,
       { style: styles.p2RetoursLetters },
-      ...Array.from(label).map((ch, i) =>
-        React.createElement(
-          Text,
-          { key: `rt-${i}`, style: styles.p2RetoursLetter },
-          ch,
-        ),
-      ),
+      React.createElement(Text, { style: styles.p2RetoursWord }, label),
     ),
   );
 }
