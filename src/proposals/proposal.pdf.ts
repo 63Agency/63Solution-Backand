@@ -868,22 +868,23 @@ const styles = StyleSheet.create({
   p3FootRow: {
     position: 'absolute',
     left: 72,
-    top: 662,
+    top: 648,
     flexDirection: 'row',
     alignItems: 'center',
   },
+  /** Courte ligne gold devant le footer (comme la ref). */
   p3FootLine: {
-    width: 26,
+    width: 48,
     height: 1.5,
     backgroundColor: '#DEA65C',
-    marginRight: 12,
+    marginRight: 16,
   },
   p3Foot: {
-    fontFamily: 'Plus Jakarta Sans',
+    fontFamily: 'Poppins',
     fontWeight: 600,
-    fontSize: 11,
-    color: '#7A756C',
-    letterSpacing: 2.1,
+    fontSize: 10,
+    color: '#8D897F',
+    letterSpacing: 2.2,
   },
 });
 
@@ -1214,10 +1215,10 @@ export async function renderProposalPdf(input: ProposalPdfInput): Promise<Buffer
         React.createElement(View, { style: styles.p3PromiseBorder }),
       ),
 
-      React.createElement(View, { style: styles.pageLine }),
       React.createElement(
         View,
         { style: styles.p3FootRow },
+        React.createElement(View, { style: styles.p3FootLine }),
         React.createElement(Text, { style: styles.p3Foot }, foot),
       ),
     ),
