@@ -636,9 +636,9 @@ const styles = StyleSheet.create({
   p2PromiseSpacer: {
     flex: 1,
   },
-  /** Petite ligne placée à droite / fin du cadre. */
+  /** Petite ligne à la fin du cadre (droite). */
   p2PromiseRightLine: {
-    width: 160,
+    width: 72,
     height: 1.2,
     backgroundColor: '#1A1510',
     marginBottom: 3,
@@ -799,8 +799,6 @@ const styles = StyleSheet.create({
     top: 480,
     width: 1136,
     height: 138,
-    borderWidth: 1,
-    borderColor: '#C9A36A',
     borderRadius: 4,
     overflow: 'hidden',
     paddingVertical: 26,
@@ -822,6 +820,17 @@ const styles = StyleSheet.create({
     width: 1136,
     height: 138,
     backgroundColor: 'rgba(10,8,6,0.18)',
+  },
+  /** Bordure gold dessinée AU-DESSUS de l’image → entoure toute la carte. */
+  p3PromiseBorder: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    width: 1136,
+    height: 138,
+    borderWidth: 1.5,
+    borderColor: '#C9A36A',
+    borderRadius: 4,
   },
   p3PromiseLabelRow: {
     flexDirection: 'row',
@@ -1202,6 +1211,7 @@ export async function renderProposalPdf(input: ProposalPdfInput): Promise<Buffer
         ),
         React.createElement(Text, { style: styles.p3PromiseTitle }, copy.promiseTitle),
         React.createElement(Text, { style: styles.p3PromiseDesc }, copy.promiseDesc),
+        React.createElement(View, { style: styles.p3PromiseBorder }),
       ),
 
       React.createElement(View, { style: styles.pageLine }),
