@@ -550,31 +550,33 @@ const styles = StyleSheet.create({
    * ───┘
    */
   p2FeedbackCol: {
-    width: 72,
+    width: 42,
     alignItems: 'center',
     justifyContent: 'center',
     paddingLeft: 2,
   },
   p2RetoursWrap: {
-    width: 70,
+    width: 40,
     height: 200,
     position: 'relative',
   },
+  /** Lettres empilées ; chaque caractère reste droit (non tourné). */
   p2RetoursLetters: {
     position: 'absolute',
-    top: 86,
-    left: 0,
-    right: 0,
-    height: 28,
+    top: 58,
+    left: 23,
+    width: 14,
+    height: 84,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  p2RetoursWord: {
+  p2RetoursLetter: {
     fontFamily: 'Poppins',
     fontWeight: 700,
-    fontSize: 9,
+    fontSize: 10,
     color: '#DEA65C',
-    letterSpacing: 1.8,
+    letterSpacing: 0,
+    lineHeight: 1.35,
     textAlign: 'center',
   },
   p2FeedbackNote: {
@@ -862,17 +864,17 @@ const styles = StyleSheet.create({
  *   ───┘
  */
 function retoursLoopGraphic(label: string) {
-  const W = 70;
+  const W = 40;
   const H = 200;
   const GOLD = '#DEA65C';
   const SW = 2.4;
-  const stemX = 58;
-  const armLeft = 28;
+  const stemX = 30;
+  const armLeft = 12;
   const topY = 10;
   const botY = H - 10;
-  // Coupure verticale pour le mot HORIZONTAL
-  const gapTop = 84;
-  const gapBot = 116;
+  // Coupure pour lettres empilées (chaque lettre reste droite)
+  const gapTop = 54;
+  const gapBot = 146;
 
   return React.createElement(
     View,
@@ -880,20 +882,20 @@ function retoursLoopGraphic(label: string) {
     React.createElement(
       Svg,
       { width: W, height: H, viewBox: `0 0 ${W} ${H}` },
-      // Pointe pleine ← (triangle équilatéral)
+      // Pointe pleine ← 
       React.createElement(Path, {
-        d: `M 18 ${topY} L 28 ${topY - 6} L 28 ${topY + 6} Z`,
+        d: `M 2 ${topY} L 12 ${topY - 6} L 12 ${topY + 6} Z`,
         fill: GOLD,
       }),
       // Bras haut
       React.createElement(Path, {
-        d: `M 28 ${topY} L ${stemX} ${topY}`,
+        d: `M 12 ${topY} L ${stemX} ${topY}`,
         stroke: GOLD,
         strokeWidth: SW,
         fill: 'none',
         strokeLinecap: 'square',
       }),
-      // Segment vertical HAUT (jusqu’à la coupure)
+      // Segment vertical HAUT
       React.createElement(Path, {
         d: `M ${stemX} ${topY} L ${stemX} ${gapTop}`,
         stroke: GOLD,
@@ -901,7 +903,7 @@ function retoursLoopGraphic(label: string) {
         fill: 'none',
         strokeLinecap: 'square',
       }),
-      // Segment vertical BAS (après la coupure)
+      // Segment vertical BAS
       React.createElement(Path, {
         d: `M ${stemX} ${gapBot} L ${stemX} ${botY}`,
         stroke: GOLD,
@@ -918,11 +920,17 @@ function retoursLoopGraphic(label: string) {
         strokeLinecap: 'square',
       }),
     ),
-    // RETOURS en une seule ligne horizontale dans la coupure
+    // R E T O U R S empilés, chaque lettre droite (pas de rotation)
     React.createElement(
       View,
       { style: styles.p2RetoursLetters },
-      React.createElement(Text, { style: styles.p2RetoursWord }, label),
+      ...Array.from(label).map((ch, i) =>
+        React.createElement(
+          Text,
+          { key: `rt-${i}`, style: styles.p2RetoursLetter },
+          ch,
+        ),
+      ),
     ),
   );
 }
