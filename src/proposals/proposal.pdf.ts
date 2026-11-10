@@ -886,19 +886,20 @@ const styles = StyleSheet.create({
     color: '#8D897F',
     letterSpacing: 2.2,
   },
-  /** Ligne très mince devant la date. */
-  p3FootDateLine: {
-    width: 28,
-    height: 0.7,
-    backgroundColor: '#DEA65C',
-    marginHorizontal: 12,
-  },
   p3FootDate: {
     fontFamily: 'Poppins',
     fontWeight: 600,
     fontSize: 10,
     color: '#8D897F',
     letterSpacing: 2.2,
+    marginLeft: 12,
+  },
+  /** Ligne longue et mince APRÈS la date. */
+  p3FootAfterDateLine: {
+    flex: 1,
+    height: 0.7,
+    backgroundColor: '#DEA65C',
+    marginLeft: 14,
   },
 });
 
@@ -1235,11 +1236,11 @@ export async function renderProposalPdf(input: ProposalPdfInput): Promise<Buffer
 
       React.createElement(
         View,
-        { style: styles.p3FootRow },
+        { style: [styles.p3FootRow, { right: 72 }] },
         React.createElement(View, { style: styles.p3FootLine }),
         React.createElement(Text, { style: styles.p3Foot }, footMain),
-        React.createElement(View, { style: styles.p3FootDateLine }),
         React.createElement(Text, { style: styles.p3FootDate }, footDate),
+        React.createElement(View, { style: styles.p3FootAfterDateLine }),
       ),
     ),
   );
