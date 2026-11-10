@@ -886,6 +886,20 @@ const styles = StyleSheet.create({
     color: '#8D897F',
     letterSpacing: 2.2,
   },
+  /** Ligne très mince devant la date. */
+  p3FootDateLine: {
+    width: 28,
+    height: 0.7,
+    backgroundColor: '#DEA65C',
+    marginHorizontal: 12,
+  },
+  p3FootDate: {
+    fontFamily: 'Poppins',
+    fontWeight: 600,
+    fontSize: 10,
+    color: '#8D897F',
+    letterSpacing: 2.2,
+  },
 });
 
 /**
@@ -981,7 +995,11 @@ export async function renderProposalPdf(input: ProposalPdfInput): Promise<Buffer
     period: localizeField(lang, input.period, 'period'),
     adBudget: localizeField(lang, input.adBudget, 'adBudget'),
   };
-  const foot = copy.foot(d.client, d.date);
+  const footMain =
+    lang === 'fr'
+      ? `Proposition confidentielle \u2014 Pr\u00e9par\u00e9e pour ${d.client}`.toUpperCase()
+      : `Confidential proposal \u2014 Prepared for ${d.client}`.toUpperCase();
+  const footDate = (d.date || '').toUpperCase();
 
   const doc = React.createElement(
     Document,
@@ -1219,7 +1237,9 @@ export async function renderProposalPdf(input: ProposalPdfInput): Promise<Buffer
         View,
         { style: styles.p3FootRow },
         React.createElement(View, { style: styles.p3FootLine }),
-        React.createElement(Text, { style: styles.p3Foot }, foot),
+        React.createElement(Text, { style: styles.p3Foot }, footMain),
+        React.createElement(View, { style: styles.p3FootDateLine }),
+        React.createElement(Text, { style: styles.p3FootDate }, footDate),
       ),
     ),
   );
