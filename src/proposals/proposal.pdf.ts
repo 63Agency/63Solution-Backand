@@ -598,7 +598,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     paddingLeft: 10,
-    paddingRight: 28,
+    paddingRight: 24,
   },
   p2PromiseBadgeBox: {
     backgroundColor: '#1A1510',
@@ -620,18 +620,25 @@ const styles = StyleSheet.create({
     backgroundColor: '#1A1510',
     marginRight: 16,
   },
+  p2PromiseTextRow: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    paddingBottom: 2,
+  },
   p2PromiseBanner: {
     fontFamily: 'Poppins',
     fontWeight: 700,
     fontSize: 15,
     color: '#0E0C0A',
-    marginRight: 20,
+    marginRight: 14,
   },
+  /** Fine line → jusqu’à la fin du cadre (marge paddingRight du bar). */
   p2PromiseRightLine: {
-    width: 220,
-    height: 1.5,
+    flex: 1,
+    height: 1.2,
     backgroundColor: '#1A1510',
-    marginLeft: 8,
+    marginBottom: 3,
   },
 
   /* ---- Page 3 (Investment) — drawn like devis/facture ---- */
@@ -1110,8 +1117,12 @@ export async function renderProposalPdf(input: ProposalPdfInput): Promise<Buffer
           React.createElement(Text, { style: styles.p2PromiseBadge }, copy.promiseBadge),
         ),
         React.createElement(View, { style: styles.p2PromiseSep }),
-        React.createElement(Text, { style: styles.p2PromiseBanner }, copy.promiseBanner),
-        React.createElement(View, { style: styles.p2PromiseRightLine }),
+        React.createElement(
+          View,
+          { style: styles.p2PromiseTextRow },
+          React.createElement(Text, { style: styles.p2PromiseBanner }, copy.promiseBanner),
+          React.createElement(View, { style: styles.p2PromiseRightLine }),
+        ),
       ),
     ),
     React.createElement(
