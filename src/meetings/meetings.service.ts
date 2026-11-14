@@ -364,7 +364,6 @@ export class MeetingsService {
 
   /**
    * Attendees Google Calendar = contact client (si email) + assignés staff.
-   * Le créateur est déjà dans assignedUserIds.
    */
   async buildAttendeeEmails(
     contactEmail: string | null | undefined,
@@ -460,8 +459,9 @@ export class MeetingsService {
   }
 
   /**
-   * Resolve staff assignees. Creator always included.
+   * Resolve staff assignees.
    * fixed_meeting → [creatorId] only.
+   * admin / admin_whatsapp → exact form list (creator not forced).
    */
   private resolveAssignedUserIds(
     raw: string[] | undefined,
@@ -476,7 +476,8 @@ export class MeetingsService {
       const t = String(id ?? '').trim();
       if (t) set.add(t);
     }
-    set.add(creatorId);
+    // Ne plus forcer le créateur : seuls les membres cochés dans le formulaire
+    // sont assignés/invités. Le créateur s'ajoute lui-même s'il le souhaite.
     return [...set];
   }
 
