@@ -34,6 +34,7 @@ export class BulkMailerService {
     user: string;
     pass: string;
     fromName: string;
+    fromEmail: string;
   } {
     const host = this.config.get<string>('BULK_SMTP_HOST')?.trim();
     const portRaw = this.config.get<string>('BULK_SMTP_PORT')?.trim();
@@ -41,6 +42,8 @@ export class BulkMailerService {
     const pass = this.config.get<string>('BULK_SMTP_PASS')?.trim();
     const fromName =
       this.config.get<string>('BULK_FROM_NAME')?.trim() || '63 Agency';
+    const fromEmail =
+      this.config.get<string>('BULK_FROM_EMAIL')?.trim() || user || '';
 
     if (!host || !portRaw || !user || !pass) {
       this.logger.error('[BulkEmail] BULK_SMTP_* not configured');
@@ -61,7 +64,7 @@ export class BulkMailerService {
     const secure =
       this.config.get<string>('BULK_SMTP_SECURE') === 'true' || port === 465;
 
-    return { host, port, secure, user, pass, fromName };
+    return { host, port, secure, user, pass, fromName, fromEmail };
   }
 
   private createTransport(): nodemailer.Transporter<SMTPTransport.SentMessageInfo> {
@@ -75,15 +78,15 @@ export class BulkMailerService {
     });
   }
 
-  private fromAddress(user: string, fromName: string): string {
+  private fromAddress(fromEmail: string, fromName: string): string {
     const safe = fromName.replace(/["\\]/g, '');
-    return `"${safe}" <${user}>`;
+    return `"${safe}" <${fromEmail}>`;
   }
 
   async sendMail(
     input: BulkSendMailInput,
   ): Promise<{ messageId: string; sentAt: string }> {
-    const { user, fromName } = this.requireBulkConfig();
+    const { fromName, fromEmail } = this.requireBulkConfig();
     const transport = this.createTransport();
     const { text, html } = withEmailSignature({
       text: input.text,
@@ -92,8 +95,8 @@ export class BulkMailerService {
 
     try {
       const info = await transport.sendMail({
-        from: this.fromAddress(user, fromName),
-        replyTo: user,
+        from: this.fromAddress(fromEmail, fromName),
+        replyTo: fromEmail,
         to: input.to,
         subject: input.subject,
         text,
