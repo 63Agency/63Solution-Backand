@@ -67,4 +67,21 @@ export class EmailController {
   ) {
     return this.email.broadcast(req.user, dto);
   }
+
+  /**
+   * Derniers événements Brevo pour un destinataire (statut delivered/opened/bounce).
+   * Auth = assertCanBroadcastEmail (même permission que le broadcast).
+   */
+  @Get('events')
+  listEvents(
+    @Req() req: { user: AppUser },
+    @Query('email') email?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const n = limit ? Number(limit) : undefined;
+    return this.email.listEvents(req.user, {
+      email,
+      limit: Number.isFinite(n) ? n : undefined,
+    });
+  }
 }

@@ -20,6 +20,8 @@ import {
   type EmailTemplateRow,
   mapEmailTemplateRow,
 } from './types/email-template.types';
+import { normalizeMessageId } from './brevo-webhook.service';
+import { UnsubscribeService } from './unsubscribe.service';
 
 export type EmailRecipient = {
   email: string;
@@ -32,6 +34,17 @@ export type BroadcastEmailResultItem = {
   success: boolean;
   messageId?: string;
   error?: string;
+};
+
+export type EmailEventItem = {
+  id: number;
+  messageId: string | null;
+  email: string;
+  event: string;
+  subject: string | null;
+  tag: string | null;
+  eventAt: string | null;
+  createdAt: string;
 };
 
 const DEFAULT_BATCH_SIZE = 20;
@@ -92,6 +105,7 @@ export class EmailService {
     private readonly supabase: SupabaseService,
     /** Bulk only — never MailerService / SMTP_* (meetings). */
     private readonly bulkMailer: BulkMailerService,
+    private readonly unsubscribe: UnsubscribeService,
     private readonly config: ConfigService,
   ) {}
 
@@ -111,6 +125,81 @@ export class EmailService {
 
   private delay(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /** Persiste un envoi bulk pour corrélation Brevo. Ne throw jamais. */
+  private async recordEmailSend(input: {
+    messageId: string | null | undefined;
+    email: string;
+    subject: string;
+    campaign?: string | null;
+  }): Promise<void> {
+    try {
+      const email = clean(input.email).toLowerCase();
+      if (!email) return;
+      const { error } = await this.supabase.getClient().from('email_sends').insert({
+        message_id: normalizeMessageId(input.messageId),
+        email,
+        subject: clean(input.subject) || null,
+        campaign: clean(input.campaign) || null,
+        sent_at: new Date().toISOString(),
+      });
+      if (error) {
+        this.logger.warn(
+          `[BulkEmail] email_sends insert failed email=${email}: ${error.message}`,
+        );
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`[BulkEmail] email_sends insert error: ${msg}`);
+    }
+  }
+
+  /**
+   * Derniers événements Brevo pour un email (statut destinataire).
+   * Auth : assertCanBroadcastEmail.
+   */
+  async listEvents(
+    user: AppUser,
+    filters: { email?: string; limit?: number },
+  ): Promise<EmailEventItem[]> {
+    assertCanBroadcastEmail(user);
+
+    const email = clean(filters.email).toLowerCase();
+    if (!email || !isValidEmail(email)) {
+      throw new ConflictException({ message: 'email requis (valide)' });
+    }
+
+    const limitRaw = filters.limit ?? 50;
+    const limit = Math.min(
+      Math.max(Number.isFinite(limitRaw) ? Math.floor(limitRaw) : 50, 1),
+      200,
+    );
+
+    const { data, error } = await this.supabase
+      .getClient()
+      .from('email_events')
+      .select(
+        'id, message_id, email, event, subject, tag, event_at, created_at',
+      )
+      .eq('email', email)
+      .order('created_at', { ascending: false })
+      .limit(limit);
+
+    if (error) {
+      throw new ConflictException({ message: error.message });
+    }
+
+    return ((data ?? []) as Array<Record<string, unknown>>).map((row) => ({
+      id: Number(row.id),
+      messageId: row.message_id ? String(row.message_id) : null,
+      email: String(row.email),
+      event: String(row.event),
+      subject: row.subject != null ? String(row.subject) : null,
+      tag: row.tag != null ? String(row.tag) : null,
+      eventAt: row.event_at ? String(row.event_at) : null,
+      createdAt: String(row.created_at ?? ''),
+    }));
   }
 
   // ─── WA → email template mappings (composer pre-fill only) ───
@@ -262,18 +351,25 @@ export class EmailService {
 
   /**
    * Envoi unitaire bulk (réutilisé par le worker broadcast multi-canal WA+email).
-   * Remplace {{name}} / {{1}}. Signature 63 Agency ajoutée dans BulkMailerService.
+   * Remplace {{name}} / {{1}}. Signature + pied désabo dans BulkMailerService.
    */
   async sendOneBroadcastEmail(input: {
     email: string;
     name?: string | null;
     subject: string;
     html: string;
+    campaign?: string | null;
   }): Promise<{ messageId: string }> {
     const email = clean(input.email).toLowerCase();
     if (!email || !isValidEmail(email)) {
       throw new ConflictException({ message: 'email invalide' });
     }
+
+    const allowed = await this.unsubscribe.filterUnsubscribed([email]);
+    if (allowed.length === 0) {
+      throw new ConflictException({ message: 'destinataire désabonné' });
+    }
+
     const displayName = clean(input.name) || 'Client';
     const subjectTpl = clean(input.subject);
     const htmlTpl = input.html.trim();
@@ -286,14 +382,24 @@ export class EmailService {
     const subject = applyNamePlaceholder(subjectTpl, displayName);
     const html = applyNamePlaceholder(htmlTpl, displayName);
     const text = htmlToText(html);
+    const unsubscribeUrl = this.unsubscribe.buildUnsubscribeUrl(email);
 
     const mailResult = await this.bulkMailer.sendMail({
       to: email,
       subject,
       html,
       text,
+      headers: this.unsubscribe.listUnsubscribeHeaders(unsubscribeUrl),
+      unsubscribeUrl,
     });
-    return { messageId: mailResult.messageId || '' };
+    const messageId = mailResult.messageId || '';
+    await this.recordEmailSend({
+      messageId,
+      email,
+      subject,
+      campaign: input.campaign,
+    });
+    return { messageId };
   }
 
   /**
@@ -352,17 +458,38 @@ export class EmailService {
       });
     }
 
+    // Fail-CLOSED si la table email_unsubscribes est inaccessible.
+    const allowedEmails = new Set(
+      await this.unsubscribe.filterUnsubscribed(
+        recipients.map((r) => r.email),
+      ),
+    );
+    const toSend: EmailRecipient[] = [];
+    for (const r of recipients) {
+      if (!allowedEmails.has(r.email)) {
+        results.push({
+          email: r.email,
+          name: r.name,
+          success: false,
+          error: 'désabonné — ignoré',
+        });
+        failed += 1;
+        continue;
+      }
+      toSend.push(r);
+    }
+
     const batchSize = this.batchSize();
     const delayMs = this.batchDelayMs();
     let batchIndex = 0;
 
     this.logger.log(
-      `[BulkEmail] start template=${templateLabel} total=${recipients.length} batchSize=${batchSize} delayMs=${delayMs}`,
+      `[BulkEmail] start template=${templateLabel} total=${toSend.length} skippedUnsub=${recipients.length - toSend.length} batchSize=${batchSize} delayMs=${delayMs}`,
     );
 
-    for (let i = 0; i < recipients.length; i += batchSize) {
+    for (let i = 0; i < toSend.length; i += batchSize) {
       batchIndex += 1;
-      const batch = recipients.slice(i, i + batchSize);
+      const batch = toSend.slice(i, i + batchSize);
       let batchSent = 0;
       let batchFailed = 0;
 
@@ -371,18 +498,30 @@ export class EmailService {
         const subject = applyNamePlaceholder(subjectTpl, displayName);
         const html = applyNamePlaceholder(htmlTpl, displayName);
         const text = htmlToText(html);
+        const unsubscribeUrl = this.unsubscribe.buildUnsubscribeUrl(
+          recipient.email,
+        );
 
         try {
-          // Signature added centrally in BulkMailerService.withEmailSignature
+          // Signature puis pied désabo dans BulkMailerService
           const mailResult = await this.bulkMailer.sendMail({
             to: recipient.email,
             subject,
             html,
             text,
+            headers:
+              this.unsubscribe.listUnsubscribeHeaders(unsubscribeUrl),
+            unsubscribeUrl,
           });
           this.logger.log(
             `[BulkEmail] sent email=${recipient.email} messageId=${mailResult.messageId || '-'}`,
           );
+          await this.recordEmailSend({
+            messageId: mailResult.messageId,
+            email: recipient.email,
+            subject,
+            campaign: templateLabel === '-' ? null : templateLabel,
+          });
           results.push({
             email: recipient.email,
             name: displayName,
@@ -408,10 +547,10 @@ export class EmailService {
       }
 
       this.logger.log(
-        `[BulkEmail] batch=${batchIndex} sent=${batchSent} failed=${batchFailed} total=${recipients.length}`,
+        `[BulkEmail] batch=${batchIndex} sent=${batchSent} failed=${batchFailed} total=${toSend.length}`,
       );
 
-      if (i + batchSize < recipients.length && delayMs > 0) {
+      if (i + batchSize < toSend.length && delayMs > 0) {
         await this.delay(delayMs);
       }
     }

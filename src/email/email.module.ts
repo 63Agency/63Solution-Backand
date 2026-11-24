@@ -1,8 +1,11 @@
 import { Module } from '@nestjs/common';
 import { SupabaseModule } from '../supabase/supabase.module';
+import { BrevoWebhookService } from './brevo-webhook.service';
 import { BulkMailerService } from './bulk-mailer.service';
 import { EmailController } from './email.controller';
+import { EmailPublicController } from './email-public.controller';
 import { EmailService } from './email.service';
+import { UnsubscribeService } from './unsubscribe.service';
 
 /**
  * Bulk marketing email only.
@@ -10,8 +13,13 @@ import { EmailService } from './email.service';
  */
 @Module({
   imports: [SupabaseModule],
-  controllers: [EmailController],
-  providers: [EmailService, BulkMailerService],
+  controllers: [EmailController, EmailPublicController],
+  providers: [
+    EmailService,
+    BulkMailerService,
+    UnsubscribeService,
+    BrevoWebhookService,
+  ],
   exports: [EmailService],
 })
 export class EmailModule {}

@@ -7,25 +7,36 @@ import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
 import type SMTPTransport from 'nodemailer/lib/smtp-transport';
 import { withEmailSignature } from '../common/mailer/email-signature';
+import { UnsubscribeService } from './unsubscribe.service';
 
 type BulkSendMailInput = {
   to: string;
   subject: string;
   text: string;
   html?: string;
+  /** Headers SMTP (ex. List-Unsubscribe). */
+  headers?: Record<string, string>;
+  /**
+   * Lien de désabonnement personnalisé.
+   * Appendé APRÈS la signature 63 Agency (dernier élément du mail).
+   */
+  unsubscribeUrl?: string;
 };
 
 /**
  * Dedicated SMTP for /email/broadcast + WhatsApp dual-channel email.
  * Completely independent from MailerService (SMTP_* / Contact63@…).
  * Never falls back to SMTP_* — missing BULK_SMTP_* fails loudly.
- * Toujours append la signature 63 Agency (html + text).
+ * Toujours append la signature 63 Agency (html + text), puis le pied désabo.
  */
 @Injectable()
 export class BulkMailerService {
   private readonly logger = new Logger(BulkMailerService.name);
 
-  constructor(private readonly config: ConfigService) {}
+  constructor(
+    private readonly config: ConfigService,
+    private readonly unsubscribe: UnsubscribeService,
+  ) {}
 
   private requireBulkConfig(): {
     host: string;
@@ -88,10 +99,24 @@ export class BulkMailerService {
   ): Promise<{ messageId: string; sentAt: string }> {
     const { fromName, fromEmail } = this.requireBulkConfig();
     const transport = this.createTransport();
-    const { text, html } = withEmailSignature({
+    let { text, html } = withEmailSignature({
       text: input.text,
       html: input.html,
     });
+
+    // Ordre : corps → signature → pied désabonnement (dernier).
+    if (input.unsubscribeUrl) {
+      if (html) {
+        html = this.unsubscribe.appendUnsubscribeFooter(
+          html,
+          input.unsubscribeUrl,
+        );
+      }
+      text = this.unsubscribe.appendUnsubscribeText(
+        text,
+        input.unsubscribeUrl,
+      );
+    }
 
     try {
       const info = await transport.sendMail({
@@ -101,6 +126,7 @@ export class BulkMailerService {
         subject: input.subject,
         text,
         html,
+        headers: input.headers,
       });
       return {
         messageId: String(info.messageId || ''),
