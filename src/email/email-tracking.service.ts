@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { SupabaseService } from '../supabase/supabase.service';
@@ -68,39 +69,51 @@ export class EmailTrackingService {
 
   /**
    * Insert tracking row. Fail-open : retourne null si erreur (envoi mail non bloqué).
+   * UUID généré côté app (pas de dépendance à RETURNING / .single()).
    */
   async createTracking(input: CreateTrackingInput): Promise<string | null> {
     const email = String(input.email ?? '')
       .trim()
       .toLowerCase();
-    if (!email) return null;
+    const channel = input.channel;
+    if (!email) {
+      this.logger.warn(
+        `[EmailTracking] create skipped channel=${channel}: email vide`,
+      );
+      return null;
+    }
 
+    const trackingId = randomUUID();
     try {
-      const { data, error } = await this.supabase
-        .getClient()
-        .from('email_opens')
-        .insert({
-          email,
-          channel: input.channel,
-          subject: cleanNull(input.subject),
-          campaign: cleanNull(input.campaign),
-          sent_by: cleanNull(input.sentBy),
-          sent_at: new Date().toISOString(),
-          open_count: 0,
-        })
-        .select('tracking_id')
-        .single();
+      const { error } = await this.supabase.getClient().from('email_opens').insert({
+        tracking_id: trackingId,
+        email,
+        channel,
+        subject: cleanNull(input.subject),
+        campaign: cleanNull(input.campaign),
+        sent_by: cleanNull(input.sentBy),
+        sent_at: new Date().toISOString(),
+        open_count: 0,
+      });
 
-      if (error || !data) {
+      if (error) {
         this.logger.warn(
-          `[EmailTracking] create failed email=${email}: ${error?.message ?? 'no data'}`,
+          `[EmailTracking] create failed channel=${channel} email=${email} ` +
+            `code=${error.code ?? '-'} details=${error.details ?? '-'} ` +
+            `message=${error.message}`,
         );
         return null;
       }
-      return String((data as { tracking_id: string }).tracking_id);
+
+      this.logger.log(
+        `[EmailTracking] created channel=${channel} id=${trackingId} email=${email}`,
+      );
+      return trackingId;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      this.logger.warn(`[EmailTracking] create error email=${email}: ${msg}`);
+      this.logger.warn(
+        `[EmailTracking] create error channel=${channel} email=${email}: ${msg}`,
+      );
       return null;
     }
   }

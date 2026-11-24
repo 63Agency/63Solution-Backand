@@ -122,9 +122,14 @@ export class BulkMailerService {
       );
     }
 
+    // Ordre final HTML : corps → signature → désabo → pixel (tout dernier).
     const trackingId = (input.trackingId ?? '').trim();
     if (trackingId) {
       html = this.tracking.ensureHtmlWithPixel(html, text, trackingId);
+    } else {
+      this.logger.warn(
+        `[BulkEmail] send without open-tracking pixel to=${input.to}`,
+      );
     }
 
     try {

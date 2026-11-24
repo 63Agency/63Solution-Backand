@@ -462,6 +462,11 @@ export class EmailService {
       campaign: input.campaign ?? null,
       sentBy: null,
     });
+    if (!trackingId) {
+      this.logger.warn(
+        `[BulkEmail] email_opens insert failed (fail-open) channel=bulk email=${email} — envoi sans pixel`,
+      );
+    }
 
     const mailResult = await this.bulkMailer.sendMail({
       to: email,
@@ -590,6 +595,11 @@ export class EmailService {
           campaign,
           sentBy: user.id,
         });
+        if (!trackingId) {
+          this.logger.warn(
+            `[BulkEmail] email_opens insert failed (fail-open) channel=bulk email=${recipient.email} — envoi sans pixel`,
+          );
+        }
 
         try {
           // Signature → désabo → pixel (BulkMailerService)
