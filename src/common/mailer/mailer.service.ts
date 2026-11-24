@@ -1,6 +1,7 @@
 import { Injectable, InternalServerErrorException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
+import { EmailTrackingService } from '../../email/email-tracking.service';
 import { withEmailSignature } from './email-signature';
 
 type SendMailInput = {
@@ -13,17 +14,23 @@ type SendMailInput = {
     content: Buffer;
     contentType?: string;
   }>;
+  /** Optionnel — campagne / contexte (ex. meeting reminder). */
+  campaign?: string | null;
+  sentBy?: string | null;
 };
 
 /**
  * SMTP account for meeting confirmations / document emails.
  * Uses SMTP_HOST, SMTP_PORT, SMTP_SECURE, SMTP_USER, SMTP_PASS only.
  * Do NOT use for bulk marketing — see BulkMailerService (BULK_SMTP_*).
- * Toujours append la signature 63 Agency (html + text).
+ * Toujours append la signature 63 Agency (html + text), puis pixel open-tracking.
  */
 @Injectable()
 export class MailerService {
-  constructor(private readonly config: ConfigService) {}
+  constructor(
+    private readonly config: ConfigService,
+    private readonly tracking: EmailTrackingService,
+  ) {}
 
   private createTransport() {
     const host = this.config.get<string>('SMTP_HOST')?.trim();
@@ -73,10 +80,22 @@ export class MailerService {
     input: SendMailInput,
   ): Promise<{ messageId: string; sentAt: string }> {
     try {
-      const { text, html } = withEmailSignature({
+      let { text, html } = withEmailSignature({
         text: input.text,
         html: input.html,
       });
+
+      const trackingId = await this.tracking.createTracking({
+        email: input.to,
+        channel: 'transactional',
+        subject: input.subject,
+        campaign: input.campaign ?? null,
+        sentBy: input.sentBy ?? null,
+      });
+      if (trackingId) {
+        html = this.tracking.ensureHtmlWithPixel(html, text, trackingId);
+      }
+
       const transport = this.createTransport();
       const info = await transport.sendMail({
         from: this.fromAddress(),

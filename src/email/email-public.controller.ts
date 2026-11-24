@@ -6,11 +6,16 @@ import {
   Header,
   HttpCode,
   HttpStatus,
+  Param,
   Post,
   Query,
+  Req,
+  StreamableFile,
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
+import type { Request } from 'express';
 import { BrevoWebhookService } from './brevo-webhook.service';
+import { EmailTrackingService } from './email-tracking.service';
 import { UnsubscribeService } from './unsubscribe.service';
 
 function unsubscribeHtmlPage(ok: boolean, detail?: string): string {
@@ -44,12 +49,13 @@ function unsubscribeHtmlPage(ok: boolean, detail?: string): string {
 </html>`;
 }
 
-/** Routes email publiques (sans JWT) — désabonnement + webhook Brevo. */
+/** Routes email publiques (sans JWT) — désabonnement + webhook Brevo + pixel. */
 @Controller('email')
 export class EmailPublicController {
   constructor(
     private readonly unsubscribe: UnsubscribeService,
     private readonly brevo: BrevoWebhookService,
+    private readonly tracking: EmailTrackingService,
   ) {}
 
   @Get('unsubscribe')
@@ -102,5 +108,35 @@ export class EmailPublicController {
   ) {
     this.brevo.assertWebhookToken(token);
     return this.brevo.handleWebhook(body);
+  }
+
+  /**
+   * Pixel open-tracking 1×1 PNG (sans JWT).
+   * registerOpen best-effort — toujours renvoyer le PNG.
+   */
+  @Get('pixel/:trackingId.png')
+  @Header('Content-Type', 'image/png')
+  @Header('Cache-Control', 'no-store, no-cache, must-revalidate, private')
+  @Header('Pragma', 'no-cache')
+  @Throttle({ default: { limit: 300, ttl: 60_000 } })
+  async openPixel(
+    @Param('trackingId') trackingIdParam: string,
+    @Req() req: Request,
+  ): Promise<StreamableFile> {
+    const trackingId = String(trackingIdParam ?? '')
+      .replace(/\.png$/i, '')
+      .trim();
+    const ip =
+      (typeof req.headers['x-forwarded-for'] === 'string'
+        ? req.headers['x-forwarded-for'].split(',')[0]?.trim()
+        : null) ||
+      req.ip ||
+      null;
+    const ua =
+      typeof req.headers['user-agent'] === 'string'
+        ? req.headers['user-agent']
+        : null;
+    await this.tracking.registerOpen(trackingId, ip, ua);
+    return new StreamableFile(this.tracking.transparentPng());
   }
 }

@@ -7,6 +7,7 @@ import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
 import type SMTPTransport from 'nodemailer/lib/smtp-transport';
 import { withEmailSignature } from '../common/mailer/email-signature';
+import { EmailTrackingService } from './email-tracking.service';
 import { UnsubscribeService } from './unsubscribe.service';
 
 type BulkSendMailInput = {
@@ -18,9 +19,11 @@ type BulkSendMailInput = {
   headers?: Record<string, string>;
   /**
    * Lien de désabonnement personnalisé.
-   * Appendé APRÈS la signature 63 Agency (dernier élément du mail).
+   * Appendé APRÈS la signature 63 Agency.
    */
   unsubscribeUrl?: string;
+  /** Pixel open-tracking — injecté en TOUT DERNIER (après signature + désabo). */
+  trackingId?: string | null;
 };
 
 /**
@@ -36,6 +39,7 @@ export class BulkMailerService {
   constructor(
     private readonly config: ConfigService,
     private readonly unsubscribe: UnsubscribeService,
+    private readonly tracking: EmailTrackingService,
   ) {}
 
   private requireBulkConfig(): {
@@ -104,7 +108,7 @@ export class BulkMailerService {
       html: input.html,
     });
 
-    // Ordre : corps → signature → pied désabonnement (dernier).
+    // Ordre : corps → signature → pied désabonnement → pixel (tout dernier).
     if (input.unsubscribeUrl) {
       if (html) {
         html = this.unsubscribe.appendUnsubscribeFooter(
@@ -116,6 +120,11 @@ export class BulkMailerService {
         text,
         input.unsubscribeUrl,
       );
+    }
+
+    const trackingId = (input.trackingId ?? '').trim();
+    if (trackingId) {
+      html = this.tracking.ensureHtmlWithPixel(html, text, trackingId);
     }
 
     try {

@@ -5,6 +5,7 @@ import { BulkMailerService } from './bulk-mailer.service';
 import { EmailController } from './email.controller';
 import { EmailPublicController } from './email-public.controller';
 import { EmailService } from './email.service';
+import { EmailTrackingModule } from './email-tracking.module';
 import { UnsubscribeService } from './unsubscribe.service';
 
 /**
@@ -12,7 +13,7 @@ import { UnsubscribeService } from './unsubscribe.service';
  * Does NOT import MailerService — meetings keep SMTP_* via common/mailer.
  */
 @Module({
-  imports: [SupabaseModule],
+  imports: [SupabaseModule, EmailTrackingModule],
   controllers: [EmailController, EmailPublicController],
   providers: [
     EmailService,

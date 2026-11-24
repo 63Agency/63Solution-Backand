@@ -84,4 +84,21 @@ export class EmailController {
       limit: Number.isFinite(n) ? n : undefined,
     });
   }
+
+  /**
+   * Ouvertures pixel (œil gris/vert).
+   * Broadcast → tout ; sinon → sent_by = user courant uniquement.
+   */
+  @Get('opens')
+  listOpens(
+    @Req() req: { user: AppUser },
+    @Query('email') email?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const n = limit ? Number(limit) : undefined;
+    return this.email.listOpens(req.user, {
+      email,
+      limit: Number.isFinite(n) ? n : undefined,
+    });
+  }
 }

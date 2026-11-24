@@ -2,6 +2,7 @@ import { ConflictException, Injectable, Logger } from '@nestjs/common';
 import * as nodemailer from 'nodemailer';
 import type SMTPTransport from 'nodemailer/lib/smtp-transport';
 import { decrypt } from '../common/crypto/mail-crypto';
+import { EmailTrackingService } from '../email/email-tracking.service';
 import { SupabaseService } from '../supabase/supabase.service';
 import type { UserMailAccountRow } from './types/mail-account.types';
 import { MAIL_ACCOUNT_SELECT } from './types/mail-account.types';
@@ -12,11 +13,20 @@ export type UserMailTransport = {
   fromName: string | null;
 };
 
+export type TrackedMailboxBodies = {
+  html: string;
+  text: string;
+  trackingId: string | null;
+};
+
 @Injectable()
 export class UserMailerService {
   private readonly logger = new Logger(UserMailerService.name);
 
-  constructor(private readonly supabase: SupabaseService) {}
+  constructor(
+    private readonly supabase: SupabaseService,
+    private readonly tracking: EmailTrackingService,
+  ) {}
 
   /**
    * Transporteur SMTP de la boîte personnelle (user_mail_accounts).
@@ -66,6 +76,43 @@ export class UserMailerService {
       transporter,
       fromEmail: String(row.email).trim(),
       fromName: row.from_name ? String(row.from_name).trim() : null,
+    };
+  }
+
+  /**
+   * Pixel open-tracking pour envois boîte perso (channel=mailbox).
+   * Fail-open si tracking impossible.
+   */
+  async attachOpenTracking(input: {
+    toEmail: string;
+    subject: string;
+    html: string;
+    text: string;
+    userId: string;
+    campaign?: string | null;
+  }): Promise<TrackedMailboxBodies> {
+    const trackingId = await this.tracking.createTracking({
+      email: input.toEmail,
+      channel: 'mailbox',
+      subject: input.subject,
+      campaign: input.campaign ?? null,
+      sentBy: input.userId,
+    });
+    if (!trackingId) {
+      return {
+        html: input.html,
+        text: input.text,
+        trackingId: null,
+      };
+    }
+    return {
+      html: this.tracking.ensureHtmlWithPixel(
+        input.html,
+        input.text,
+        trackingId,
+      ),
+      text: input.text,
+      trackingId,
     };
   }
 }

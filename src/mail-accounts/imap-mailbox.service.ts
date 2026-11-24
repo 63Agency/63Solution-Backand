@@ -260,12 +260,20 @@ export class ImapMailboxService {
     const { transporter, fromEmail, fromName } =
       await this.userMailer.getTransporterForUser(userId);
     const from = formatFrom(fromName, fromEmail);
+    const tracked = await this.userMailer.attachOpenTracking({
+      toEmail: toList[0] ?? fromEmail,
+      subject,
+      html: bodies.html,
+      text: bodies.text,
+      userId,
+      campaign: 'mailbox-compose',
+    });
     const raw = await buildRaw({
       from,
       to: toList.join(', '),
       subject,
-      html: bodies.html,
-      text: bodies.text,
+      html: tracked.html,
+      text: tracked.text,
       ...(attachments ? { attachments } : {}),
     });
 
@@ -341,12 +349,20 @@ export class ImapMailboxService {
       headers.References = references || original.messageId;
     }
 
+    const tracked = await this.userMailer.attachOpenTracking({
+      toEmail: original.fromAddr,
+      subject,
+      html: bodies.html,
+      text: bodies.text,
+      userId,
+      campaign: 'mailbox-reply',
+    });
     const raw = await buildRaw({
       from,
       to: original.fromAddr,
       subject,
-      html: bodies.html,
-      text: bodies.text,
+      html: tracked.html,
+      text: tracked.text,
       headers: Object.keys(headers).length ? headers : undefined,
       ...(attachments ? { attachments } : {}),
     });

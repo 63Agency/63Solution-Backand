@@ -123,6 +123,11 @@ function isPathAllowed(
     return true;
   }
 
+  // Statut ouvertures pixel — scoped sent_by côté EmailService.
+  if (normalized === '/email/opens' && verb === 'GET') {
+    return true;
+  }
+
   for (const prefix of prefixes) {
     if (normalized === prefix || normalized.startsWith(`${prefix}/`)) {
       return true;

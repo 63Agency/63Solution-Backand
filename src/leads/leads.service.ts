@@ -367,6 +367,14 @@ export class LeadsService {
 
     const { transporter, fromEmail, fromName } =
       await this.userMailer.getTransporterForUser(user.id);
+    const tracked = await this.userMailer.attachOpenTracking({
+      toEmail,
+      subject,
+      html: bodyHtml,
+      text: bodyText,
+      userId: user.id,
+      campaign: 'lead-email',
+    });
 
     const now = new Date().toISOString();
     try {
@@ -374,8 +382,8 @@ export class LeadsService {
         from: formatFrom(fromName, fromEmail),
         to: toEmail,
         subject,
-        html: bodyHtml,
-        text: bodyText,
+        html: tracked.html,
+        text: tracked.text,
       });
       const messageId = info.messageId ? String(info.messageId) : null;
       return await this.insertEmailMessage({
@@ -384,8 +392,8 @@ export class LeadsService {
         fromEmail,
         toEmail,
         subject,
-        bodyHtml,
-        bodyText,
+        bodyHtml: tracked.html,
+        bodyText: tracked.text,
         messageId,
         status: 'sent',
         error: null,

@@ -11,16 +11,18 @@ import {
   assertCanBroadcastEmail,
   assertFullAdmin,
 } from '../common/utils/access';
+import { canAccessWhatsapp } from '../common/utils/roles';
 import { SupabaseService } from '../supabase/supabase.service';
+import { normalizeMessageId } from './brevo-webhook.service';
 import { BulkMailerService } from './bulk-mailer.service';
 import type { BroadcastEmailDto } from './dto/broadcast-email.dto';
+import { EmailTrackingService } from './email-tracking.service';
 import type { UpsertEmailTemplateDto } from './dto/upsert-email-template.dto';
 import {
   type EmailTemplateMapping,
   type EmailTemplateRow,
   mapEmailTemplateRow,
 } from './types/email-template.types';
-import { normalizeMessageId } from './brevo-webhook.service';
 import { UnsubscribeService } from './unsubscribe.service';
 
 export type EmailRecipient = {
@@ -45,6 +47,19 @@ export type EmailEventItem = {
   tag: string | null;
   eventAt: string | null;
   createdAt: string;
+};
+
+export type EmailOpenItem = {
+  trackingId: string;
+  email: string;
+  channel: string;
+  subject: string | null;
+  campaign: string | null;
+  sentBy: string | null;
+  sentAt: string;
+  openedAt: string | null;
+  openCount: number;
+  status: 'sent' | 'opened';
 };
 
 const DEFAULT_BATCH_SIZE = 20;
@@ -106,6 +121,7 @@ export class EmailService {
     /** Bulk only — never MailerService / SMTP_* (meetings). */
     private readonly bulkMailer: BulkMailerService,
     private readonly unsubscribe: UnsubscribeService,
+    private readonly tracking: EmailTrackingService,
     private readonly config: ConfigService,
   ) {}
 
@@ -200,6 +216,62 @@ export class EmailService {
       eventAt: row.event_at ? String(row.event_at) : null,
       createdAt: String(row.created_at ?? ''),
     }));
+  }
+
+  /**
+   * Statut ouvertures pixel (œil gris/vert).
+   * Broadcast rights → tout ; sinon → sent_by = user.id uniquement.
+   */
+  async listOpens(
+    user: AppUser,
+    filters: { email?: string; limit?: number },
+  ): Promise<EmailOpenItem[]> {
+    const email = clean(filters.email).toLowerCase();
+    if (!email || !isValidEmail(email)) {
+      throw new ConflictException({ message: 'email requis (valide)' });
+    }
+
+    const limitRaw = filters.limit ?? 50;
+    const limit = Math.min(
+      Math.max(Number.isFinite(limitRaw) ? Math.floor(limitRaw) : 50, 1),
+      200,
+    );
+
+    let query = this.supabase
+      .getClient()
+      .from('email_opens')
+      .select(
+        'tracking_id, email, channel, subject, campaign, sent_by, sent_at, opened_at, open_count',
+      )
+      .eq('email', email)
+      .order('sent_at', { ascending: false })
+      .limit(limit);
+
+    if (!canAccessWhatsapp(user.role)) {
+      query = query.eq('sent_by', user.id);
+    }
+
+    const { data, error } = await query;
+    if (error) {
+      throw new ConflictException({ message: error.message });
+    }
+
+    return ((data ?? []) as Array<Record<string, unknown>>).map((row) => {
+      const openedAt = row.opened_at ? String(row.opened_at) : null;
+      const openCount = Number(row.open_count) || 0;
+      return {
+        trackingId: String(row.tracking_id),
+        email: String(row.email),
+        channel: String(row.channel),
+        subject: row.subject != null ? String(row.subject) : null,
+        campaign: row.campaign != null ? String(row.campaign) : null,
+        sentBy: row.sent_by != null ? String(row.sent_by) : null,
+        sentAt: String(row.sent_at ?? ''),
+        openedAt,
+        openCount,
+        status: openedAt || openCount > 0 ? ('opened' as const) : ('sent' as const),
+      };
+    });
   }
 
   // ─── WA → email template mappings (composer pre-fill only) ───
@@ -383,6 +455,13 @@ export class EmailService {
     const html = applyNamePlaceholder(htmlTpl, displayName);
     const text = htmlToText(html);
     const unsubscribeUrl = this.unsubscribe.buildUnsubscribeUrl(email);
+    const trackingId = await this.tracking.createTracking({
+      email,
+      channel: 'bulk',
+      subject,
+      campaign: input.campaign ?? null,
+      sentBy: null,
+    });
 
     const mailResult = await this.bulkMailer.sendMail({
       to: email,
@@ -391,6 +470,7 @@ export class EmailService {
       text,
       headers: this.unsubscribe.listUnsubscribeHeaders(unsubscribeUrl),
       unsubscribeUrl,
+      trackingId,
     });
     const messageId = mailResult.messageId || '';
     await this.recordEmailSend({
@@ -501,9 +581,18 @@ export class EmailService {
         const unsubscribeUrl = this.unsubscribe.buildUnsubscribeUrl(
           recipient.email,
         );
+        const campaign =
+          templateLabel === '-' ? null : templateLabel;
+        const trackingId = await this.tracking.createTracking({
+          email: recipient.email,
+          channel: 'bulk',
+          subject,
+          campaign,
+          sentBy: user.id,
+        });
 
         try {
-          // Signature puis pied désabo dans BulkMailerService
+          // Signature → désabo → pixel (BulkMailerService)
           const mailResult = await this.bulkMailer.sendMail({
             to: recipient.email,
             subject,
@@ -512,6 +601,7 @@ export class EmailService {
             headers:
               this.unsubscribe.listUnsubscribeHeaders(unsubscribeUrl),
             unsubscribeUrl,
+            trackingId,
           });
           this.logger.log(
             `[BulkEmail] sent email=${recipient.email} messageId=${mailResult.messageId || '-'}`,
@@ -520,7 +610,7 @@ export class EmailService {
             messageId: mailResult.messageId,
             email: recipient.email,
             subject,
-            campaign: templateLabel === '-' ? null : templateLabel,
+            campaign,
           });
           results.push({
             email: recipient.email,
