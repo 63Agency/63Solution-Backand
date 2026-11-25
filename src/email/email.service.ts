@@ -16,7 +16,7 @@ import { SupabaseService } from '../supabase/supabase.service';
 import { normalizeMessageId } from './brevo-webhook.service';
 import { BulkMailerService } from './bulk-mailer.service';
 import type { BroadcastEmailDto } from './dto/broadcast-email.dto';
-import type { EmailDiagDto } from './dto/email-diag.dto';
+import type { EmailDiagDto, EmailDiagMode } from './dto/email-diag.dto';
 import { EmailTrackingService } from './email-tracking.service';
 import type { UpsertEmailTemplateDto } from './dto/upsert-email-template.dto';
 import {
@@ -669,9 +669,9 @@ export class EmailService {
   }
 
   /**
-   * Diagnostic isolé : compare livraison raw vs full (signaux marketing bulk).
+   * Diagnostic isolé : isole quel signal marketing bulk fait droper Gmail.
+   * Modes : raw | full | pixel | unsub | headers.
    * Auth = assertCanBroadcastEmail (identique à POST /email/broadcast).
-   * Ne touche pas au flux broadcast.
    */
   async diag(
     user: AppUser,
@@ -679,7 +679,7 @@ export class EmailService {
   ): Promise<
     | {
         ok: true;
-        mode: 'raw' | 'full';
+        mode: EmailDiagMode;
         from: string;
         to: string;
         subject: string;
@@ -713,9 +713,18 @@ export class EmailService {
       let unsubscribeUrl: string | undefined;
       let trackingId: string | null = null;
 
-      if (mode === 'full') {
+      const needsUnsubUrl =
+        mode === 'full' || mode === 'unsub' || mode === 'headers';
+      const needsPixel = mode === 'full' || mode === 'pixel';
+      const needsHeaders = mode === 'full' || mode === 'headers';
+
+      if (needsUnsubUrl) {
         unsubscribeUrl = this.unsubscribe.buildUnsubscribeUrl(to);
+      }
+      if (needsHeaders && unsubscribeUrl) {
         headers = this.unsubscribe.listUnsubscribeHeaders(unsubscribeUrl);
+      }
+      if (needsPixel) {
         trackingId = await this.tracking.createTracking({
           email: to,
           channel: 'bulk',
@@ -725,7 +734,7 @@ export class EmailService {
         });
         if (!trackingId) {
           this.logger.warn(
-            `[EmailDiag] email_opens insert failed (fail-open) email=${to} — full sans pixel`,
+            `[EmailDiag] email_opens insert failed (fail-open) email=${to} mode=${mode} — sans pixel`,
           );
         }
       }

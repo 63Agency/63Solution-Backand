@@ -70,7 +70,7 @@ export class EmailController {
   }
 
   /**
-   * Diagnostic SMTP bulk : raw (minimal) vs full (pixel + désabo + List-Unsubscribe).
+   * Diagnostic SMTP bulk : raw | full | pixel | unsub | headers.
    * Auth = même que POST /email/broadcast (assertCanBroadcastEmail).
    */
   @Post('diag')

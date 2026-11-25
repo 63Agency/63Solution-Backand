@@ -157,11 +157,14 @@ export class BulkMailerService {
 
   /**
    * Diagnostic isolé (POST /email/diag) — ne modifie pas le flux broadcast.
-   * raw  = email minimal (pas de signature / pixel / désabo / List-Unsubscribe).
-   * full = même chemin bulk (signature → désabo → pixel + headers List-Unsubscribe).
+   * raw     = email minimal (aucun signal marketing).
+   * full    = chemin bulk complet (signature → désabo → pixel + List-Unsubscribe).
+   * pixel   = raw + uniquement le pixel open-tracking.
+   * unsub   = raw + uniquement le pied HTML de désabonnement.
+   * headers = raw + uniquement List-Unsubscribe / List-Unsubscribe-Post.
    */
   async sendDiagMail(input: {
-    mode: 'raw' | 'full';
+    mode: 'raw' | 'full' | 'pixel' | 'unsub' | 'headers';
     to: string;
     subject: string;
     text: string;
@@ -186,6 +189,7 @@ export class BulkMailerService {
     let text = input.text;
     let html = input.html ?? '';
     let headersSent: Record<string, string> = {};
+    const trackingId = (input.trackingId ?? '').trim();
 
     if (input.mode === 'full') {
       ({ text, html } = withEmailSignature({
@@ -206,13 +210,29 @@ export class BulkMailerService {
         );
       }
 
-      const trackingId = (input.trackingId ?? '').trim();
       if (trackingId) {
         html = this.tracking.ensureHtmlWithPixel(html, text, trackingId);
       }
 
       headersSent = { ...(input.headers ?? {}) };
+    } else if (input.mode === 'pixel') {
+      // RAW + ONLY tracking pixel (même ensureHtmlWithPixel que le broadcast).
+      if (trackingId) {
+        html = this.tracking.ensureHtmlWithPixel(html, text, trackingId);
+      }
+    } else if (input.mode === 'unsub') {
+      // RAW + ONLY pied désabo visible (même appendUnsubscribeFooter).
+      if (input.unsubscribeUrl && html) {
+        html = this.unsubscribe.appendUnsubscribeFooter(
+          html,
+          input.unsubscribeUrl,
+        );
+      }
+    } else if (input.mode === 'headers') {
+      // RAW + ONLY List-Unsubscribe headers.
+      headersSent = { ...(input.headers ?? {}) };
     }
+    // mode === 'raw' → inchangé (corps minimal, aucun header).
 
     const info = await transport.sendMail({
       from,
