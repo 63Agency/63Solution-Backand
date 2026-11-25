@@ -16,6 +16,7 @@ import { SupabaseService } from '../supabase/supabase.service';
 import { normalizeMessageId } from './brevo-webhook.service';
 import { BulkMailerService } from './bulk-mailer.service';
 import type { BroadcastEmailDto } from './dto/broadcast-email.dto';
+import type { EmailDiagDto } from './dto/email-diag.dto';
 import { EmailTrackingService } from './email-tracking.service';
 import type { UpsertEmailTemplateDto } from './dto/upsert-email-template.dto';
 import {
@@ -665,5 +666,104 @@ export class EmailService {
       total: sent + failed,
       results,
     };
+  }
+
+  /**
+   * Diagnostic isolé : compare livraison raw vs full (signaux marketing bulk).
+   * Auth = assertCanBroadcastEmail (identique à POST /email/broadcast).
+   * Ne touche pas au flux broadcast.
+   */
+  async diag(
+    user: AppUser,
+    dto: EmailDiagDto,
+  ): Promise<
+    | {
+        ok: true;
+        mode: 'raw' | 'full';
+        from: string;
+        to: string;
+        subject: string;
+        usedHost: string;
+        usedUser: string;
+        messageId: string;
+        response: string;
+        accepted: unknown;
+        rejected: unknown;
+        headersSent: Record<string, string>;
+      }
+    | { ok: false; error: string }
+  > {
+    assertCanBroadcastEmail(user);
+
+    const to = clean(dto.to).toLowerCase();
+    const mode = dto.mode;
+    if (!to || !isValidEmail(to)) {
+      const fail = { ok: false as const, error: 'email destinataire invalide' };
+      // eslint-disable-next-line no-console
+      console.log('[EmailDiag]', fail);
+      return fail;
+    }
+
+    const subject = `DIAG ${mode} ${new Date().toISOString()}`;
+    const html = `<p>Diagnostic ${mode} ${Date.now()}</p>`;
+    const text = htmlToText(html);
+
+    try {
+      let headers: Record<string, string> | undefined;
+      let unsubscribeUrl: string | undefined;
+      let trackingId: string | null = null;
+
+      if (mode === 'full') {
+        unsubscribeUrl = this.unsubscribe.buildUnsubscribeUrl(to);
+        headers = this.unsubscribe.listUnsubscribeHeaders(unsubscribeUrl);
+        trackingId = await this.tracking.createTracking({
+          email: to,
+          channel: 'bulk',
+          subject,
+          campaign: 'email-diag',
+          sentBy: user.id,
+        });
+        if (!trackingId) {
+          this.logger.warn(
+            `[EmailDiag] email_opens insert failed (fail-open) email=${to} — full sans pixel`,
+          );
+        }
+      }
+
+      const mail = await this.bulkMailer.sendDiagMail({
+        mode,
+        to,
+        subject,
+        text,
+        html,
+        headers,
+        unsubscribeUrl,
+        trackingId,
+      });
+
+      const payload = {
+        ok: true as const,
+        mode,
+        from: mail.from,
+        to,
+        subject,
+        usedHost: mail.usedHost,
+        usedUser: mail.usedUser,
+        messageId: mail.messageId,
+        response: mail.response,
+        accepted: mail.accepted,
+        rejected: mail.rejected,
+        headersSent: mail.headersSent,
+      };
+      // eslint-disable-next-line no-console
+      console.log('[EmailDiag]', payload);
+      return payload;
+    } catch (err: unknown) {
+      const error = extractErrorMessage(err);
+      const fail = { ok: false as const, error };
+      // eslint-disable-next-line no-console
+      console.log('[EmailDiag]', fail);
+      return fail;
+    }
   }
 }

@@ -12,6 +12,7 @@ import {
 import { AuthGuard } from '@nestjs/passport';
 import type { AppUser } from '../auth/types/app-user';
 import { BroadcastEmailDto } from './dto/broadcast-email.dto';
+import { EmailDiagDto } from './dto/email-diag.dto';
 import { UpsertEmailTemplateDto } from './dto/upsert-email-template.dto';
 import { EmailService } from './email.service';
 
@@ -66,6 +67,15 @@ export class EmailController {
     @Body() dto: BroadcastEmailDto,
   ) {
     return this.email.broadcast(req.user, dto);
+  }
+
+  /**
+   * Diagnostic SMTP bulk : raw (minimal) vs full (pixel + désabo + List-Unsubscribe).
+   * Auth = même que POST /email/broadcast (assertCanBroadcastEmail).
+   */
+  @Post('diag')
+  diag(@Req() req: { user: AppUser }, @Body() dto: EmailDiagDto) {
+    return this.email.diag(req.user, dto);
   }
 
   /**

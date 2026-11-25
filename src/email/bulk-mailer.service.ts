@@ -154,4 +154,85 @@ export class BulkMailerService {
       });
     }
   }
+
+  /**
+   * Diagnostic isolé (POST /email/diag) — ne modifie pas le flux broadcast.
+   * raw  = email minimal (pas de signature / pixel / désabo / List-Unsubscribe).
+   * full = même chemin bulk (signature → désabo → pixel + headers List-Unsubscribe).
+   */
+  async sendDiagMail(input: {
+    mode: 'raw' | 'full';
+    to: string;
+    subject: string;
+    text: string;
+    html: string;
+    headers?: Record<string, string>;
+    unsubscribeUrl?: string;
+    trackingId?: string | null;
+  }): Promise<{
+    from: string;
+    usedHost: string;
+    usedUser: string;
+    messageId: string;
+    response: string;
+    accepted: SMTPTransport.SentMessageInfo['accepted'];
+    rejected: SMTPTransport.SentMessageInfo['rejected'];
+    headersSent: Record<string, string>;
+  }> {
+    const { host, user, fromName, fromEmail } = this.requireBulkConfig();
+    const transport = this.createTransport();
+    const from = this.fromAddress(fromEmail, fromName);
+
+    let text = input.text;
+    let html = input.html ?? '';
+    let headersSent: Record<string, string> = {};
+
+    if (input.mode === 'full') {
+      ({ text, html } = withEmailSignature({
+        text: input.text,
+        html: input.html,
+      }));
+
+      if (input.unsubscribeUrl) {
+        if (html) {
+          html = this.unsubscribe.appendUnsubscribeFooter(
+            html,
+            input.unsubscribeUrl,
+          );
+        }
+        text = this.unsubscribe.appendUnsubscribeText(
+          text,
+          input.unsubscribeUrl,
+        );
+      }
+
+      const trackingId = (input.trackingId ?? '').trim();
+      if (trackingId) {
+        html = this.tracking.ensureHtmlWithPixel(html, text, trackingId);
+      }
+
+      headersSent = { ...(input.headers ?? {}) };
+    }
+
+    const info = await transport.sendMail({
+      from,
+      replyTo: fromEmail,
+      to: input.to,
+      subject: input.subject,
+      text,
+      html,
+      headers: Object.keys(headersSent).length > 0 ? headersSent : undefined,
+    });
+
+    return {
+      from,
+      usedHost: host,
+      usedUser: user,
+      messageId: String(info.messageId || ''),
+      response: String(info.response || ''),
+      accepted: info.accepted,
+      rejected: info.rejected,
+      headersSent,
+    };
+  }
 }
