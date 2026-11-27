@@ -12,6 +12,7 @@ import { DashboardModule } from './dashboard/dashboard.module';
 import { CloudinaryModule } from './cloudinary/cloudinary.module';
 import { ClientsModule } from './clients/clients.module';
 import { ClientAuthModule } from './client-auth/client-auth.module';
+import { CrmModule } from './crm/crm.module';
 import { DevisModule } from './devis/devis.module';
 import { EmailModule } from './email/email.module';
 import { FacturesModule } from './factures/factures.module';
@@ -49,6 +50,7 @@ import { PublicModule } from './public/public.module';
     DashboardModule,
     RealtimeModule,
     ClickupModule,
+    CrmModule,
     CloudinaryModule,
     ClientsModule,
     PortalClientsModule,
